@@ -1,18 +1,18 @@
-[package]
-name = "rubyx"
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
+description = "Ruby-Python bridge powered by Rust"
+license = "MIT"
 
-[lib]
-crate-type = ["cdylib"]
+[workspace]
+members = ["ext/rubyx"]
 
-[dependencies]
+
+[workspace.dependencies]
 magnus = { version = "0.8", features = ["embed"] }
 libloading = "0.9"
 libc = "1.0.0-alpha.3"
 thiserror = "2.0"
 rb-sys = { version = "0.9", features = ["link-ruby"] }
 crossbeam-channel = "0.5"
-
-[dev-dependencies]
-serial_test = "3.3.1"
+serial_test = "3.4.0"

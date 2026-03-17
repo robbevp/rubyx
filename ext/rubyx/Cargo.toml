@@ -1,0 +1,19 @@
+[package]
+name = "rubyx"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+magnus = { workspace = true }
+libloading = { workspace = true }
+libc = { workspace = true }
+thiserror = { workspace = true }
+rb-sys = { workspace = true }
+crossbeam-channel = { workspace = true }
+
+[dev-dependencies]
+serial_test = { workspace = true }
