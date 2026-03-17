@@ -53,10 +53,10 @@ impl From<PythonException> for magnus::Error {
     fn from(e: PythonException) -> Self {
         let (class, msg) = match &e {
             PythonException::Exception { .. } => {
-                (magnus::exception::runtime_error(), e.to_magnus_message())
+                (crate::ruby_helpers::runtime_error(), e.to_magnus_message())
             }
             PythonException::SyntaxError { .. } => {
-                (magnus::exception::syntax_error(), e.to_magnus_message())
+                (crate::ruby_helpers::syntax_error(), e.to_magnus_message())
             }
         };
         magnus::Error::new(class, msg)

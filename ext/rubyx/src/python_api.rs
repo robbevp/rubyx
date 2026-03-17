@@ -878,7 +878,7 @@ impl PythonApi {
             unsafe {
                 (api.py_object_get_attr_string)(
                     tb_module.ptr(),
-                    b"format_tb\0".as_ptr() as *const c_char,
+                    c"format_tb".as_ptr() as *const c_char,
                 )
             },
             api,

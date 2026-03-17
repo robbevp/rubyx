@@ -4,7 +4,7 @@ use crate::python_api::PythonApi;
 use crate::python_ffi::PyObject;
 use crate::python_guard::PyGuard;
 use crate::rubyx_object::python_to_sendable;
-use crate::stream::{AsyncStream, StreamItem};
+use crate::stream::StreamItem;
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::thread;
@@ -49,7 +49,7 @@ impl Iterator for AsyncGeneratorStream {
         match self.receiver.recv() {
             Ok(StreamItem::Value(v)) => Some(v.try_into()),
             Ok(StreamItem::Error(e)) => Some(Err(magnus::Error::new(
-                magnus::exception::runtime_error(),
+                crate::ruby_helpers::runtime_error(),
                 e,
             ))),
             Ok(StreamItem::End) | Err(_) => None,

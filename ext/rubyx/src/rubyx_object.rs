@@ -2,11 +2,12 @@ use crate::convert::ToPython;
 use crate::python_api::PythonApi;
 use crate::python_ffi::PyObject;
 use crate::python_guard::PyGuard;
+use crate::ruby_helpers;
 use crate::stream::SendableValue;
 use magnus::r_hash::ForEach;
 use magnus::typed_data::Obj;
 use magnus::value::ReprValue;
-use magnus::{exception, RHash, Ruby, Symbol, TryConvert, Value};
+use magnus::{IntoValue, RHash, Ruby, Symbol, TryConvert, Value};
 
 pub(crate) fn python_to_sendable(
     py_val: *mut PyObject,
@@ -79,10 +80,11 @@ pub(crate) fn python_to_sendable(
     }
     Err("Cannot convert Python value to Ruby".to_string())
 }
+#[allow(dead_code)]
 fn ruby_to_python(value: Value, api: &PythonApi) -> Result<*mut PyObject, magnus::Error> {
     let ruby = Ruby::get().map_err(|e| {
         magnus::Error::new(
-            exception::runtime_error(),
+            ruby_helpers::runtime_error(),
             format!("Ruby VM handle unavailable: {e}"),
         )
     })?;
@@ -102,19 +104,19 @@ fn ruby_to_python(value: Value, api: &PythonApi) -> Result<*mut PyObject, magnus
         let val = i64::try_convert(value)?;
         return val
             .to_python(api)
-            .map_err(|e| magnus::Error::new(exception::runtime_error(), e.to_string()));
+            .map_err(|e| magnus::Error::new(ruby_helpers::runtime_error(), e.to_string()));
     }
     if value.is_kind_of(ruby.class_float()) {
         let val = f64::try_convert(value)?;
         return val
             .to_python(api)
-            .map_err(|e| magnus::Error::new(exception::runtime_error(), e.to_string()));
+            .map_err(|e| magnus::Error::new(ruby_helpers::runtime_error(), e.to_string()));
     }
     if value.is_kind_of(ruby.class_string()) {
         let val = String::try_convert(value)?;
         return val
             .to_python(api)
-            .map_err(|e| magnus::Error::new(exception::runtime_error(), e.to_string()));
+            .map_err(|e| magnus::Error::new(ruby_helpers::runtime_error(), e.to_string()));
     }
     // Already wrapped Python object
     if let Ok(obj) = Obj::<RubyxObject>::try_convert(value) {
@@ -122,7 +124,7 @@ fn ruby_to_python(value: Value, api: &PythonApi) -> Result<*mut PyObject, magnus
         return Ok(obj.as_ptr());
     }
     Err(magnus::Error::new(
-        exception::type_error(),
+        ruby_helpers::type_error(),
         "Cannot convert Ruby value to Python",
     ))
 }
@@ -233,6 +235,7 @@ impl RubyxObject {
     /// - Currently restricted to single inheritance where the missing Ruby method maps directly to a single Python
     ///   object interaction.
     /// - Keyword arguments (kwargs) are only supported if the last Ruby argument is a hash that can be converted to a Python dict.
+    #[allow(dead_code)]
     pub fn method_missing(&self, args: &[magnus::Value]) -> Result<magnus::Value, magnus::Error> {
         let api = crate::api();
         let gil = api.ensure_gil();
@@ -241,23 +244,23 @@ impl RubyxObject {
         let result = (|| -> Result<Value, magnus::Error> {
             if args.is_empty() {
                 return Err(magnus::Error::new(
-                    exception::arg_error(),
+                    ruby_helpers::arg_error(),
                     "No method name given",
                 ));
             }
             let ruby = Ruby::get().map_err(|e| {
                 magnus::Error::new(
-                    exception::runtime_error(),
+                    ruby_helpers::runtime_error(),
                     format!("Ruby VM handle unavailable: {e}"),
                 )
-            });
+            })?;
             let method_name = if let Ok(s) = String::try_convert(args[0]) {
                 s
             } else if let Ok(sym) = Symbol::try_convert(args[0]) {
                 sym.name()?.to_string()
             } else {
                 return Err(magnus::Error::new(
-                    exception::type_error(),
+                    ruby_helpers::type_error(),
                     "method_missing expects Symbol/String method name",
                 ));
             };
@@ -266,7 +269,7 @@ impl RubyxObject {
             if method_name.ends_with("=") {
                 if args.len() != 2 {
                     return Err(magnus::Error::new(
-                        exception::arg_error(),
+                        ruby_helpers::arg_error(),
                         "Setter required exactly one value",
                     ));
                 }
@@ -279,7 +282,7 @@ impl RubyxObject {
                         return Err(magnus::Error::from(py_err));
                     }
                     return Err(magnus::Error::new(
-                        exception::runtime_error(),
+                        ruby_helpers::runtime_error(),
                         "Failed to set Python attribute",
                     ));
                 }
@@ -290,30 +293,30 @@ impl RubyxObject {
             if python_attr.is_null() {
                 api.clear_error();
                 return Err(magnus::Error::new(
-                    exception::exception(),
+                    ruby_helpers::exception(),
                     format!("undefined method `{method_name}` for a Python object"),
                 ));
             }
             let py_attr_guard = PyGuard::new(python_attr, api).ok_or_else(|| {
-                magnus::Error::new(exception::runtime_error(), "Null Python attribute")
+                magnus::Error::new(ruby_helpers::runtime_error(), "Null Python attribute")
             })?;
 
             // Attribute read path (non-callable + no args) - `obj.foo`
             if api.callable_check(py_attr_guard.ptr()) == 0 && args.len() == 1 {
                 let wrapper = RubyxObject::new(py_attr_guard.ptr(), api).ok_or_else(|| {
                     magnus::Error::new(
-                        exception::runtime_error(),
+                        ruby_helpers::runtime_error(),
                         "Failed to wrap Python attribute",
                     )
                 })?;
-                return Ok(magnus::IntoValue::into_value(wrapper));
+                return Ok(wrapper.into_value_with(&ruby));
             }
             // Call path - `obj.foo(args)`
             let call_args = &args[1..];
 
             // Optional kwargs: last arg hash
             let (positional, kwargs) = if let Some(last) = call_args.last() {
-                if last.is_kind_of(ruby?.class_hash()) {
+                if last.is_kind_of(ruby.class_hash()) {
                     (
                         &call_args[..call_args.len() - 1],
                         Some(RHash::try_convert(*last)?),
@@ -329,12 +332,12 @@ impl RubyxObject {
             let py_args = api.tuple_new(positional.len() as isize);
             if py_args.is_null() {
                 return Err(magnus::Error::new(
-                    exception::runtime_error(),
+                    ruby_helpers::runtime_error(),
                     "Failed to allocate Python args tuple",
                 ));
             }
             let py_args_guard = PyGuard::new(py_args, api).ok_or_else(|| {
-                magnus::Error::new(exception::runtime_error(), "Null Python args tuple")
+                magnus::Error::new(ruby_helpers::runtime_error(), "Null Python args tuple")
             })?;
             for (i, arg) in positional.iter().enumerate() {
                 let py_arg = ruby_to_python(*arg, api)?;
@@ -345,7 +348,7 @@ impl RubyxObject {
                         return Err(magnus::Error::from(py_err));
                     }
                     return Err(magnus::Error::new(
-                        exception::runtime_error(),
+                        ruby_helpers::runtime_error(),
                         "Failed to set tuple argument",
                     ));
                 }
@@ -356,12 +359,12 @@ impl RubyxObject {
                 let dict = api.dict_new();
                 if dict.is_null() {
                     return Err(magnus::Error::new(
-                        exception::runtime_error(),
+                        ruby_helpers::runtime_error(),
                         "Failed to allocate kwargs dict",
                     ));
                 }
                 let guard = PyGuard::new(dict, api).ok_or_else(|| {
-                    magnus::Error::new(exception::runtime_error(), "Null kwargs dict")
+                    magnus::Error::new(ruby_helpers::runtime_error(), "Null kwargs dict")
                 })?;
                 // Save the key and value to python dict
                 hash.foreach(|k: Value, v: Value| {
@@ -371,12 +374,12 @@ impl RubyxObject {
                         sym.name()?.to_string()
                     } else {
                         return Err(magnus::Error::new(
-                            exception::type_error(),
+                            ruby_helpers::type_error(),
                             "kwargs keys must be String or Symbol",
                         ));
                     };
                     let py_key = key.to_python(api).map_err(|e| {
-                        magnus::Error::new(exception::runtime_error(), format!("{e:?}"))
+                        magnus::Error::new(ruby_helpers::runtime_error(), format!("{e:?}"))
                     })?;
                     let py_val = ruby_to_python(v, api)?;
                     let rc = api.dict_set_item(guard.ptr(), py_key, py_val);
@@ -388,7 +391,7 @@ impl RubyxObject {
                             return Err(magnus::Error::from(py_err));
                         }
                         return Err(magnus::Error::new(
-                            exception::runtime_error(),
+                            ruby_helpers::runtime_error(),
                             "Failed to set kwargs item",
                         ));
                     }
@@ -408,17 +411,17 @@ impl RubyxObject {
                     return Err(magnus::Error::from(py_err));
                 }
                 return Err(magnus::Error::new(
-                    exception::runtime_error(),
+                    ruby_helpers::runtime_error(),
                     "Python call failed",
                 ));
             }
             let py_result_guard = PyGuard::new(py_result, api).ok_or_else(|| {
-                magnus::Error::new(exception::runtime_error(), "Null Python result")
+                magnus::Error::new(ruby_helpers::runtime_error(), "Null Python result")
             })?;
             let wrapper = RubyxObject::new(py_result_guard.ptr(), api).ok_or_else(|| {
-                magnus::Error::new(exception::runtime_error(), "Failed to wrap a Python result")
+                magnus::Error::new(ruby_helpers::runtime_error(), "Failed to wrap a Python result")
             })?;
-            Ok(magnus::IntoValue::into_value(wrapper))
+            Ok(wrapper.into_value_with(&ruby))
         })();
         api.release_gil(gil);
         result

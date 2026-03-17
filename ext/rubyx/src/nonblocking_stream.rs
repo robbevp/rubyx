@@ -1,8 +1,9 @@
 use crate::pipe_notify::PipeNotify;
+use crate::ruby_helpers::runtime_error;
 use crate::stream::StreamItem;
-use crossbeam_channel::{Receiver, RecvError};
+use crossbeam_channel::Receiver;
 use magnus::value::ReprValue;
-use magnus::{Error, Module, RArray, Ruby, Value};
+use magnus::{Error, Module, Ruby, Value};
 use std::ffi::c_void;
 use std::os::fd::RawFd;
 use std::sync::Arc;
@@ -104,13 +105,14 @@ unsafe extern "C" fn recv_without_gvl_cb(args: *mut c_void) -> *mut c_void {
 
 struct RecvArgs {
     receiver: Receiver<StreamItem>,
-    result: Option<Result<StreamItem, RecvError>>,
+    result: Option<Result<StreamItem, crossbeam_channel::RecvError>>,
     cancel: Arc<AtomicBool>,
 }
 #[magnus::wrap(class = "Rubyx::NonBlockingStream", free_immediately)]
 pub(crate) struct NonBlockingStream {
     receiver: Receiver<StreamItem>,
     pipe: Arc<PipeNotify>,
+    #[allow(dead_code)]
     cancel: Arc<AtomicBool>,
 }
 impl NonBlockingStream {
@@ -142,7 +144,7 @@ impl NonBlockingStream {
         match args.result? {
             Ok(StreamItem::Value(v)) => Some(v.try_into()),
             Ok(StreamItem::Error(e)) => {
-                Some(Err(Error::new(magnus::exception::runtime_error(), e)))
+                Some(Err(Error::new(runtime_error(), e)))
             }
             Ok(StreamItem::End) | Err(_) => None,
         }
@@ -165,10 +167,10 @@ impl NonBlockingStream {
                 match self.receiver.try_recv() {
                     Ok(StreamItem::Value(v)) => {
                         let val: Value = v.try_into()?;
-                        let _: Value = magnus::block::yield_value(val)?;
+                        let _: Value = ruby.yield_value(val)?;
                     }
                     Ok(StreamItem::Error(e)) => {
-                        return Err(Error::new(magnus::exception::runtime_error(), e));
+                        return Err(Error::new(ruby.exception_runtime_error(), e));
                     }
                     Ok(StreamItem::End) => return Ok(()),
                     Err(crossbeam_channel::TryRecvError::Empty) => break,
@@ -186,7 +188,7 @@ impl NonBlockingStream {
             loop {
                 match self.next_gvl_release() {
                     Some(Ok(value)) => {
-                        let _: Value = magnus::block::yield_value(value)?;
+                        let _: Value = ruby.yield_value(value)?;
                     }
                     Some(Err(e)) => return Err(e),
                     None => return Ok(()),
@@ -202,6 +204,7 @@ mod tests {
     use crate::stream::SendableValue;
     use crate::test_helpers::with_ruby_python;
     use crossbeam_channel::{bounded, unbounded};
+    use magnus::RArray;
     use magnus::TryConvert;
     use magnus::value::ReprValue;
     use serial_test::serial;
@@ -416,6 +419,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn make_stream_with_pipe(rx: Receiver<StreamItem>, pipe: Arc<PipeNotify>) -> NonBlockingStream {
         NonBlockingStream {
             receiver: rx,

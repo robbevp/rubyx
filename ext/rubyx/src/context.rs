@@ -49,7 +49,6 @@ impl Drop for RubyxContext {
 #[cfg(test)]
 mod tests {
     use crate::eval::make_globals;
-    use crate::python_guard::PyGuard;
     use crate::test_helpers::skip_if_no_python;
     use serial_test::serial;
 

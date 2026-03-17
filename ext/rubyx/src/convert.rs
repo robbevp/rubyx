@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum ConvertError {
     #[error("Type error: expected {expected}, got {got}")]
     TypeError { expected: &'static str, got: String },
@@ -27,14 +28,12 @@ pub enum ConvertError {
 // pub trait ToPython {
 //     fn to_python(&self, api: &PythonApi) -> Result<*mut PyObject, ConvertError>;
 // }
+#[allow(dead_code)]
 pub trait ToPython {
     fn to_python(&self, api: &PythonApi) -> Result<*mut PyObject, ConvertError>;
 }
 
-// TODO: Implement FromPython trait
-// pub trait FromPython: Sized {
-//     fn from_python(obj: *mut PyObject, api: &PythonApi) -> Result<Self, ConvertError>;
-// }
+#[allow(dead_code)]
 pub trait FromPython: Sized {
     fn from_python(obj: *mut PyObject, api: &PythonApi) -> Result<Self, ConvertError>;
 }

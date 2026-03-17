@@ -11,6 +11,7 @@ pub struct PyThreadState {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[allow(dead_code)]
 pub enum PyGILState {
     Locked = 0,
     Unlocked = 1,

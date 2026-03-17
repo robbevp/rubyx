@@ -1,4 +1,3 @@
-use crate::async_gen::AsyncStrategy::RustDriving;
 use crate::async_gen::{AsyncGeneratorStream, AsyncStrategy};
 use crate::nonblocking_stream::NonBlockingStream;
 use crate::pipe_notify::PipeNotify;
@@ -7,7 +6,6 @@ use crate::python_finder::find_libpython;
 use crate::rubyx_object::python_to_sendable;
 use crate::rubyx_object::RubyxObject;
 use crate::rubyx_stream::RubyxStream;
-use crate::stream::AsyncStream;
 use crate::stream::StreamItem;
 use crossbeam_channel::unbounded;
 use magnus::typed_data::Obj;
@@ -27,10 +25,12 @@ mod exception;
 mod import;
 mod nonblocking_stream;
 mod pipe_notify;
+#[allow(dead_code)]
 mod python_api;
 mod python_ffi;
 mod python_finder;
 mod python_guard;
+mod ruby_helpers;
 mod rubyx_object;
 mod rubyx_stream;
 mod stream;
@@ -50,13 +50,13 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
     // Initialize Python
     let path = find_libpython().ok_or_else(|| {
         magnus::Error::new(
-            magnus::exception::runtime_error(),
+            ruby.exception_runtime_error(),
             "Could not find libpython",
         )
     })?;
     let mut api = unsafe {
         PythonApi::load(&path)
-            .map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e.to_string()))?
+            .map_err(|e| magnus::Error::new(ruby.exception_runtime_error(), e.to_string()))?
     };
     api.initialize();
     let _ = api.install_async_to_sync_class();
@@ -68,7 +68,7 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
     // Set Python API globally
     API.set(api).map_err(|_| {
         magnus::Error::new(
-            magnus::exception::runtime_error(),
+            ruby.exception_runtime_error(),
             "Failed to set Python API",
         )
     })?;
@@ -119,7 +119,7 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
 fn create_stream(args: &[Value]) -> Result<rubyx_stream::RubyxStream, magnus::Error> {
     let ruby = Ruby::get().map_err(|e| {
         magnus::Error::new(
-            magnus::exception::runtime_error(),
+            ruby_helpers::runtime_error(),
             format!("Error getting Ruby: {e}"),
         )
     })?;
@@ -130,7 +130,7 @@ fn create_stream(args: &[Value]) -> Result<rubyx_stream::RubyxStream, magnus::Er
         // Get proc
         let proc = ruby.block_proc().map_err(|e| {
             magnus::Error::new(
-                magnus::exception::runtime_error(),
+                ruby_helpers::runtime_error(),
                 format!("Error getting block proc: {e}"),
             )
         })?;
@@ -139,7 +139,7 @@ fn create_stream(args: &[Value]) -> Result<rubyx_stream::RubyxStream, magnus::Er
         create_stream_from_iterable(iterable)
     } else {
         Err(magnus::Error::new(
-            magnus::exception::arg_error(),
+            ruby_helpers::arg_error(),
             "Rubyx.stream takes either 0 or 1 arguments",
         ))
     }
@@ -150,7 +150,7 @@ fn create_nb_stream(
 ) -> Result<nonblocking_stream::NonBlockingStream, magnus::Error> {
     let obj = Obj::<RubyxObject>::try_convert(iterable).map_err(|_| {
         magnus::Error::new(
-            magnus::exception::type_error(),
+            ruby_helpers::type_error(),
             "Rubyx.nb_stream requires a Python object (RubyxObject)",
         )
     })?;
@@ -164,7 +164,7 @@ fn create_nb_stream(
         if sync_iter.is_null() {
             api.release_gil(gil);
             return Err(magnus::Error::new(
-                magnus::exception::runtime_error(),
+                ruby_helpers::runtime_error(),
                 "Failed to wrap async generator",
             ));
         }
@@ -174,7 +174,7 @@ fn create_nb_stream(
         if iter.is_null() {
             api.release_gil(gil);
             return Err(magnus::Error::new(
-                magnus::exception::type_error(),
+                ruby_helpers::type_error(),
                 "Object is not iterable",
             ));
         }
@@ -191,7 +191,7 @@ fn create_nb_stream(
     let (tx, rx) = unbounded();
     let pipe = Arc::new(PipeNotify::new().map_err(|e| {
         magnus::Error::new(
-            magnus::exception::runtime_error(),
+            ruby_helpers::runtime_error(),
             format!("Failed to create pipe: {e}"),
         )
     })?);
@@ -248,7 +248,7 @@ fn create_nb_stream(
 fn create_async_stream(args: &[Value]) -> Result<rubyx_stream::RubyxStream, magnus::Error> {
     let ruby = Ruby::get().map_err(|e| {
         magnus::Error::new(
-            magnus::exception::runtime_error(),
+            ruby_helpers::runtime_error(),
             format!("Error getting Ruby: {e}"),
         )
     })?;
@@ -259,7 +259,7 @@ fn create_async_stream(args: &[Value]) -> Result<rubyx_stream::RubyxStream, magn
         // Get proc
         let proc = ruby.block_proc().map_err(|e| {
             magnus::Error::new(
-                magnus::exception::runtime_error(),
+                ruby_helpers::runtime_error(),
                 format!("Error getting block proc: {e}"),
             )
         })?;
@@ -268,7 +268,7 @@ fn create_async_stream(args: &[Value]) -> Result<rubyx_stream::RubyxStream, magn
         create_async_stream_from_iterable(iterable)
     } else {
         Err(magnus::Error::new(
-            magnus::exception::arg_error(),
+            ruby_helpers::arg_error(),
             "Rubyx.stream takes either 0 or 1 arguments",
         ))
     }
@@ -281,14 +281,14 @@ fn create_async_stream(args: &[Value]) -> Result<rubyx_stream::RubyxStream, magn
 fn create_stream_from_iterable(iterable: Value) -> Result<RubyxStream, magnus::Error> {
     let obj = Obj::<RubyxObject>::try_convert(iterable).map_err(|_| {
         magnus::Error::new(
-            magnus::exception::type_error(),
+            ruby_helpers::type_error(),
             "Rubyx.stream requires a Python object (RubyxObject)",
         )
     })?;
 
     let stream =
         AsyncGeneratorStream::from_python_object(obj.as_ptr(), AsyncStrategy::PythonAdapter)
-            .map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e))?;
+            .map_err(|e| magnus::Error::new(ruby_helpers::runtime_error(), e))?;
 
     Ok(RubyxStream::from_stream(stream))
 }
@@ -296,7 +296,7 @@ fn create_stream_from_iterable(iterable: Value) -> Result<RubyxStream, magnus::E
 fn create_async_stream_from_iterable(iterable: Value) -> Result<RubyxStream, magnus::Error> {
     let obj = Obj::<RubyxObject>::try_convert(iterable).map_err(|_| {
         magnus::Error::new(
-            magnus::exception::type_error(),
+            ruby_helpers::type_error(),
             "Rubyx.stream requires a Python object (RubyxObject)",
         )
     })?;
@@ -309,13 +309,13 @@ fn create_async_stream_from_iterable(iterable: Value) -> Result<RubyxStream, mag
 
     if !is_async {
         return Err(magnus::Error::new(
-            magnus::exception::type_error(),
+            ruby_helpers::type_error(),
             "Object is not an async iterable (missing __aiter__/__anext__)",
         ));
     }
 
     let stream = AsyncGeneratorStream::from_python_object(obj.as_ptr(), AsyncStrategy::RustDriving)
-        .map_err(|e| magnus::Error::new(magnus::exception::runtime_error(), e))?;
+        .map_err(|e| magnus::Error::new(ruby_helpers::runtime_error(), e))?;
 
     Ok(RubyxStream::from_stream(stream))
 }
@@ -325,7 +325,7 @@ fn create_async_stream_from_iterable(iterable: Value) -> Result<RubyxStream, mag
 #[cfg(test)]
 mod tests {
     use crate::rubyx_object::RubyxObject;
-    use crate::test_helpers::{skip_if_no_python, skip_if_no_ruby_python, with_ruby_python};
+    use crate::test_helpers::{skip_if_no_python, with_ruby_python};
     use magnus::TryConvert;
     use serial_test::serial;
 
@@ -1537,7 +1537,7 @@ mod tests {
 
             // Build kwargs hash: { sort_keys: true }
             let kwargs = ruby.hash_new();
-            let _ = kwargs.aset(magnus::Symbol::new("sort_keys"), true.into_value_with(ruby));
+            let _ = kwargs.aset(ruby.to_symbol("sort_keys"), true.into_value_with(ruby));
 
             let args = vec![
                 "dumps".into_value_with(ruby),

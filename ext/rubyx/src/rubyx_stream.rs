@@ -1,7 +1,7 @@
 use crate::async_gen::AsyncGeneratorStream;
-use crate::stream::AsyncStream;
+use crate::ruby_helpers::runtime_error;
 use magnus::value::ReprValue;
-use magnus::{Error, IntoValue, Ruby, Value};
+use magnus::{Error, Ruby, Value};
 
 #[magnus::wrap(class = "Rubyx::Stream", free_immediately)]
 pub(crate) struct RubyxStream {
@@ -12,7 +12,7 @@ impl RubyxStream {
     pub fn each(&self) -> Result<Value, magnus::Error> {
         let ruby = Ruby::get().map_err(|e| {
             magnus::Error::new(
-                magnus::exception::runtime_error(),
+                runtime_error(),
                 format!("Error getting Ruby: {e}"),
             )
         })?;
@@ -31,7 +31,7 @@ impl RubyxStream {
         // the Python GIL and subsequent Python calls deadlock.
         let mut stream = self.inner.borrow_mut().take().ok_or_else(|| {
             magnus::Error::new(
-                magnus::exception::runtime_error(),
+                runtime_error(),
                 "Stream already consumed",
             )
         })?;
@@ -49,14 +49,14 @@ impl RubyxStream {
     pub fn next_item(&self) -> Result<Value, Error> {
         let ruby = Ruby::get().map_err(|e| {
             magnus::Error::new(
-                magnus::exception::runtime_error(),
+                runtime_error(),
                 format!("Error getting Ruby: {e}"),
             )
         })?;
         let mut inner = self.inner.borrow_mut();
         let stream = inner.as_mut().ok_or_else(|| {
             magnus::Error::new(
-                magnus::exception::runtime_error(),
+                runtime_error(),
                 "Stream already consumed",
             )
         })?;

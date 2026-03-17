@@ -6,6 +6,7 @@ license = "MIT"
 
 [workspace]
 members = ["ext/rubyx"]
+resolver = "2"
 
 
 [workspace.dependencies]

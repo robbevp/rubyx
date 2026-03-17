@@ -1,9 +1,9 @@
 use crate::python_api::PythonApi;
 use crate::python_ffi::PyObject;
 use crate::python_guard::PyGuard;
+use crate::ruby_helpers::runtime_error;
 use crate::rubyx_object::RubyxObject;
-use magnus::{Error, IntoValue, Value};
-use std::ffi::CString;
+use magnus::{Error, IntoValue, Ruby, Value};
 
 /// Py_eval_input = 258 (for expressions)
 const PY_EVAL_INPUT: i64 = 258;
@@ -84,6 +84,9 @@ pub(crate) fn eval_with_globals(
     globals: *mut PyObject,
     api: &'static PythonApi,
 ) -> Result<Value, magnus::Error> {
+    let ruby = Ruby::get().map_err(|e| {
+        Error::new(runtime_error(), format!("Ruby VM unavailable: {e}"))
+    })?;
     // Try as expression first (Py_eval_input)
     let py_result = match api.run_string(&code, PY_EVAL_INPUT, globals, globals) {
         Ok(output) if !output.is_null() => output,
@@ -102,7 +105,7 @@ pub(crate) fn eval_with_globals(
                 // Real error (NameError, etc.) — not a syntax issue
                 let err = if !api.has_error() {
                     Error::new(
-                        magnus::exception::runtime_error(),
+                        runtime_error(),
                         "Python execution failed",
                     )
                 } else {
@@ -110,7 +113,7 @@ pub(crate) fn eval_with_globals(
                         .map(Error::from)
                         .unwrap_or_else(|| {
                             Error::new(
-                                magnus::exception::runtime_error(),
+                                runtime_error(),
                                 "Python execution failed",
                             )
                         })
@@ -130,7 +133,7 @@ pub(crate) fn eval_with_globals(
                                 .map(Error::from)
                                 .unwrap_or_else(|| {
                                     Error::new(
-                                        magnus::exception::runtime_error(),
+                                        runtime_error(),
                                         "Python execution failed",
                                     )
                                 });
@@ -138,7 +141,7 @@ pub(crate) fn eval_with_globals(
                         }
                         Ok(_) => { /* Py_file_input returns Py_None — ignore */ }
                         Err(e) => {
-                            return Err(Error::new(magnus::exception::runtime_error(), e));
+                            return Err(Error::new(runtime_error(), e));
                         }
                     }
 
@@ -152,19 +155,19 @@ pub(crate) fn eval_with_globals(
                                     .map(Error::from)
                                     .unwrap_or_else(|| {
                                         Error::new(
-                                            magnus::exception::runtime_error(),
+                                            runtime_error(),
                                             "Python execution failed",
                                         )
                                     });
                                 return Err(err);
                             }
                             return Err(Error::new(
-                                magnus::exception::runtime_error(),
+                                runtime_error(),
                                 "Python execution failed",
                             ));
                         }
                         Err(e) => {
-                            return Err(Error::new(magnus::exception::runtime_error(), e));
+                            return Err(Error::new(runtime_error(), e));
                         }
                     }
                 }
@@ -177,7 +180,7 @@ pub(crate) fn eval_with_globals(
                                 .map(Error::from)
                                 .unwrap_or_else(|| {
                                     Error::new(
-                                        magnus::exception::runtime_error(),
+                                        runtime_error(),
                                         "Python execution failed",
                                     )
                                 });
@@ -185,20 +188,20 @@ pub(crate) fn eval_with_globals(
                         }
                         Ok(out) => out, // Py_None — no expression value to return
                         Err(e) => {
-                            return Err(Error::new(magnus::exception::runtime_error(), e));
+                            return Err(Error::new(runtime_error(), e));
                         }
                     }
                 }
             }
         }
         Err(e) => {
-            return Err(Error::new(magnus::exception::runtime_error(), e));
+            return Err(Error::new(runtime_error(), e));
         }
     };
 
     let py_result_guard = PyGuard::new(py_result, api).ok_or_else(|| {
         Error::new(
-            magnus::exception::runtime_error(),
+            runtime_error(),
             "Python returned null result",
         )
     })?;
@@ -206,11 +209,11 @@ pub(crate) fn eval_with_globals(
     // Wrap result — RubyxObject::new increfs, so we decref our reference after
     let wrapper = RubyxObject::new(py_result_guard.ptr(), api).ok_or_else(|| {
         Error::new(
-            magnus::exception::runtime_error(),
+            runtime_error(),
             "Failed to create RubyxObject",
         )
     })?;
-    Ok(wrapper.into_value())
+    Ok(wrapper.into_value_with(&ruby))
 }
 
 pub(crate) fn rubyx_eval(code: String) -> Result<Value, magnus::Error> {

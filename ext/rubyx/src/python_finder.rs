@@ -8,13 +8,7 @@ pub fn find_libpython() -> Option<PathBuf> {
         }
     }
 
-    for path in common_paths() {
-        if path.exists() {
-            return Some(path);
-        }
-    }
-
-    None
+    common_paths().into_iter().find(|path| path.exists())
 }
 
 fn find_via_python_config() -> Option<PathBuf> {

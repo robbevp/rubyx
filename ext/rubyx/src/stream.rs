@@ -1,5 +1,6 @@
 use crate::api;
 use crate::python_ffi::PyObject;
+use crate::ruby_helpers::runtime_error;
 use crate::rubyx_object::python_to_sendable;
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use magnus::value::ReprValue;
@@ -28,10 +29,7 @@ impl TryInto<magnus::Value> for SendableValue {
 
     fn try_into(self) -> Result<Value, Self::Error> {
         let ruby = magnus::Ruby::get().map_err(|_| {
-            magnus::Error::new(
-                magnus::exception::runtime_error(),
-                "Must be called on Ruby thread".to_string(),
-            )
+            magnus::Error::new(runtime_error(), "Must be called on Ruby thread".to_string())
         })?;
         let result = match self {
             SendableValue::Nil => ruby.qnil().as_value(),
@@ -69,6 +67,7 @@ pub(crate) enum StreamItem {
 }
 
 /// A Stream of values from a background thread
+#[allow(dead_code)]
 pub struct AsyncStream {
     receiver: Option<Receiver<StreamItem>>,
     cancel_sender: Sender<()>,
@@ -77,6 +76,7 @@ pub struct AsyncStream {
 
 impl AsyncStream {
     /// Stream which iterates a Python Iterator in the background
+    #[allow(dead_code)]
     pub fn from_python_iterator(py_iter: *mut PyObject) -> Self {
         let (value_tx, value_rx) = unbounded();
         let (cancel_tx, cancel_rx) = bounded(1);
@@ -116,7 +116,7 @@ impl AsyncStream {
                     break;
                 }
                 // Convert and send to ruby
-                let ruby_value = python_to_sendable(item, &api)
+                let ruby_value = python_to_sendable(item, api)
                     .map_err(|e| format!("Error converting Python value to Ruby: {e}"));
                 api.decref(item);
                 match ruby_value {
@@ -198,10 +198,7 @@ impl Iterator for AsyncStream {
         let rx = self.receiver.as_ref()?;
         match rx.recv() {
             Ok(StreamItem::Value(v)) => Some(v.try_into()),
-            Ok(StreamItem::Error(e)) => Some(Err(magnus::Error::new(
-                magnus::exception::runtime_error(),
-                e,
-            ))),
+            Ok(StreamItem::Error(e)) => Some(Err(magnus::Error::new(runtime_error(), e))),
             Ok(StreamItem::End) | Err(_) => None,
         }
     }
