@@ -1,5 +1,11 @@
 /target
+/tmp/
+/pkg/
+/lib/rubyx/*.bundle
+/lib/rubyx/*.so
+/lib/rubyx/*.dll
 Gemfile.lock
 Cargo.lock
 uv.lock
 .venv/
+.idea/

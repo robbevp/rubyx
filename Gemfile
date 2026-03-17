@@ -1,4 +1,5 @@
 source 'https://rubygems.org'
 
-gem 'rspec', '~> 3.12'
+gemspec
+
 gem 'async', '~> 2.0'
