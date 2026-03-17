@@ -175,6 +175,7 @@ pub struct PythonApi {
 }
 
 impl PythonApi {
+    #[allow(clippy::missing_transmute_annotations)]
     pub unsafe fn load(path: &Path) -> Result<Self, libloading::Error> {
         #[cfg(unix)]
         let lib = {

@@ -88,7 +88,7 @@ pub(crate) fn eval_with_globals(
         Error::new(runtime_error(), format!("Ruby VM unavailable: {e}"))
     })?;
     // Try as expression first (Py_eval_input)
-    let py_result = match api.run_string(&code, PY_EVAL_INPUT, globals, globals) {
+    let py_result = match api.run_string(code, PY_EVAL_INPUT, globals, globals) {
         Ok(output) if !output.is_null() => output,
         Ok(_) => {
             // Expression eval failed — check if it's a syntax error
@@ -220,10 +220,10 @@ pub(crate) fn rubyx_eval(code: String) -> Result<Value, magnus::Error> {
     let api = crate::api();
     let gil = api.ensure_gil();
 
-    let result = (|| -> Result<Value, magnus::Error> {
+    let result = {
         let globals = make_globals(api);
         eval_with_globals(&code, globals.ptr(), api)
-    })();
+    };
 
     api.release_gil(gil);
     result

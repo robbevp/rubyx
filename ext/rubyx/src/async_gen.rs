@@ -148,7 +148,7 @@ impl AsyncGeneratorStream {
                     break;
                 }
                 // Convert and send to ruby
-                let ruby_value = python_to_sendable(item, &api)
+                let ruby_value = python_to_sendable(item, api)
                     .map_err(|e| format!("Error converting Python value to Ruby: {e}"));
                 api.decref(item);
                 match ruby_value {

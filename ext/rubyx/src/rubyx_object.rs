@@ -229,8 +229,6 @@ impl RubyxObject {
     /// Python kwargs dict. A Python tuple is built from the positional arguments, and
     /// the call is dispatched via `PyObject_Call(callable, args_tuple, kwargs_dict)`.
     ///
-    ///
-
     /// # Limitations
     /// - Currently restricted to single inheritance where the missing Ruby method maps directly to a single Python
     ///   object interaction.
