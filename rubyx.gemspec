@@ -3,6 +3,7 @@ require_relative 'lib/rubyx/version'
 Gem::Specification.new do |spec|
   spec.name          = "rubyx"
   spec.version       = Rubyx::VERSION
+  spec.license       = 'MIT'
   spec.author        = "Naiker"
   spec.email         = ["yinho999@gmail.com"]
   spec.summary       = "Ruby-Python bridge powered by Rust"
