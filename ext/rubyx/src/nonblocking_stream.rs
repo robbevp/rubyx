@@ -6,8 +6,8 @@ use magnus::value::ReprValue;
 use magnus::{Error, Module, Ruby, Value};
 use std::ffi::c_void;
 use std::os::fd::RawFd;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 extern "C" {
     /// Release the GVL, call `func(data1)`, then reacquire the GVL.
@@ -143,9 +143,7 @@ impl NonBlockingStream {
         }
         match args.result? {
             Ok(StreamItem::Value(v)) => Some(v.try_into()),
-            Ok(StreamItem::Error(e)) => {
-                Some(Err(Error::new(runtime_error(), e)))
-            }
+            Ok(StreamItem::Error(e)) => Some(Err(Error::new(runtime_error(), e))),
             Ok(StreamItem::End) | Err(_) => None,
         }
     }
@@ -204,9 +202,9 @@ mod tests {
     use crate::stream::SendableValue;
     use crate::test_helpers::with_ruby_python;
     use crossbeam_channel::{bounded, unbounded};
+    use magnus::value::ReprValue;
     use magnus::RArray;
     use magnus::TryConvert;
-    use magnus::value::ReprValue;
     use serial_test::serial;
     use std::sync::atomic::Ordering;
     use std::time::{Duration, Instant};

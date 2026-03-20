@@ -49,10 +49,7 @@ fn api() -> &'static PythonApi {
 fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
     // Initialize Python
     let path = find_libpython().ok_or_else(|| {
-        magnus::Error::new(
-            ruby.exception_runtime_error(),
-            "Could not find libpython",
-        )
+        magnus::Error::new(ruby.exception_runtime_error(), "Could not find libpython")
     })?;
     let mut api = unsafe {
         PythonApi::load(&path)
@@ -67,10 +64,7 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
     api.save_thread();
     // Set Python API globally
     API.set(api).map_err(|_| {
-        magnus::Error::new(
-            ruby.exception_runtime_error(),
-            "Failed to set Python API",
-        )
+        magnus::Error::new(ruby.exception_runtime_error(), "Failed to set Python API")
     })?;
 
     // Define Rubyx Module

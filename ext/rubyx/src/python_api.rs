@@ -554,7 +554,7 @@ impl PythonApi {
         if ptr.is_null() {
             return None; // Python error (e.g., encoding failure)
         }
-        let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, size as usize) };
+        let slice = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), size as usize) };
         String::from_utf8(slice.to_vec()).ok()
     }
 
@@ -1949,7 +1949,7 @@ assert json.dumps({"test": True}) == '{"test": true}'
             let ptr = unsafe { (guard.api().py_unicode_as_utf8_and_size)(py_str, &mut size) };
             assert!(!ptr.is_null(), "Failed to get UTF-8 for '{}'", test_str);
 
-            let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, size as usize) };
+            let slice = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), size as usize) };
             let back = std::str::from_utf8(slice).expect("Invalid UTF-8");
             assert_eq!(back, test_str, "Roundtrip failed for '{}'", test_str);
 

@@ -10,12 +10,8 @@ pub(crate) struct RubyxStream {
 
 impl RubyxStream {
     pub fn each(&self) -> Result<Value, magnus::Error> {
-        let ruby = Ruby::get().map_err(|e| {
-            magnus::Error::new(
-                runtime_error(),
-                format!("Error getting Ruby: {e}"),
-            )
-        })?;
+        let ruby = Ruby::get()
+            .map_err(|e| magnus::Error::new(runtime_error(), format!("Error getting Ruby: {e}")))?;
 
         // Enumerator
         if !ruby.block_given() {
@@ -29,12 +25,11 @@ impl RubyxStream {
         // the stream must be cleaned up immediately (cancel + join worker thread)
         // rather than waiting for Ruby's GC. Otherwise the worker thread holds
         // the Python GIL and subsequent Python calls deadlock.
-        let mut stream = self.inner.borrow_mut().take().ok_or_else(|| {
-            magnus::Error::new(
-                runtime_error(),
-                "Stream already consumed",
-            )
-        })?;
+        let mut stream = self
+            .inner
+            .borrow_mut()
+            .take()
+            .ok_or_else(|| magnus::Error::new(runtime_error(), "Stream already consumed"))?;
         for result in &mut stream {
             match result {
                 Ok(val) => {
@@ -47,19 +42,12 @@ impl RubyxStream {
     }
 
     pub fn next_item(&self) -> Result<Value, Error> {
-        let ruby = Ruby::get().map_err(|e| {
-            magnus::Error::new(
-                runtime_error(),
-                format!("Error getting Ruby: {e}"),
-            )
-        })?;
+        let ruby = Ruby::get()
+            .map_err(|e| magnus::Error::new(runtime_error(), format!("Error getting Ruby: {e}")))?;
         let mut inner = self.inner.borrow_mut();
-        let stream = inner.as_mut().ok_or_else(|| {
-            magnus::Error::new(
-                runtime_error(),
-                "Stream already consumed",
-            )
-        })?;
+        let stream = inner
+            .as_mut()
+            .ok_or_else(|| magnus::Error::new(runtime_error(), "Stream already consumed"))?;
         match stream.next() {
             Some(Ok(val)) => Ok(val),
             Some(Err(err)) => Err(err),

@@ -417,7 +417,10 @@ impl RubyxObject {
                 magnus::Error::new(ruby_helpers::runtime_error(), "Null Python result")
             })?;
             let wrapper = RubyxObject::new(py_result_guard.ptr(), api).ok_or_else(|| {
-                magnus::Error::new(ruby_helpers::runtime_error(), "Failed to wrap a Python result")
+                magnus::Error::new(
+                    ruby_helpers::runtime_error(),
+                    "Failed to wrap a Python result",
+                )
             })?;
             Ok(wrapper.into_value_with(&ruby))
         })();

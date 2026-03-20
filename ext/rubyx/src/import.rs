@@ -11,9 +11,8 @@ pub(crate) fn rubyx_import(module_name: String) -> Result<Value, Error> {
     let gil = api.ensure_gil();
 
     let result = (|| -> Result<Value, Error> {
-        let ruby = Ruby::get().map_err(|e| {
-            Error::new(runtime_error(), format!("Ruby VM unavailable: {e}"))
-        })?;
+        let ruby = Ruby::get()
+            .map_err(|e| Error::new(runtime_error(), format!("Ruby VM unavailable: {e}")))?;
         let module = match api.import_module(module_name.as_str()) {
             Ok(module) => module,
             Err(msg) => {

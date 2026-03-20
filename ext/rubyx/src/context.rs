@@ -111,7 +111,7 @@ mod tests {
 
         // Set a variable
         api.run_simple_string("x = 42").ok(); // this uses its own globals
-        // Instead, use run_string with our globals
+                                              // Instead, use run_string with our globals
         let set_result = api.run_string("x = 42", 257, globals, globals);
         assert!(set_result.is_ok(), "setting x = 42 should succeed");
 
@@ -308,7 +308,10 @@ mod tests {
 
         // globals should still be valid (refcount = 1, our extra ref)
         let size = api.dict_size(globals);
-        assert!(size >= 1, "globals should still be alive after context drop");
+        assert!(
+            size >= 1,
+            "globals should still be alive after context drop"
+        );
 
         // Final cleanup
         api.decref(globals);
@@ -344,7 +347,10 @@ mod tests {
                 false
             }
         };
-        assert!(!leaked, "state should not leak between separate globals dicts");
+        assert!(
+            !leaked,
+            "state should not leak between separate globals dicts"
+        );
     }
 
     // ========== Multiple Contexts ==========
