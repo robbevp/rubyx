@@ -156,6 +156,7 @@ fn create_nb_stream(
     let py_iter = if api.is_async_iterable(obj.as_ptr()) {
         let sync_iter = api.wrap_async_generator(obj.as_ptr());
         if sync_iter.is_null() {
+            api.clear_error();
             api.release_gil(gil);
             return Err(magnus::Error::new(
                 ruby_helpers::runtime_error(),
@@ -166,6 +167,7 @@ fn create_nb_stream(
     } else {
         let iter = api.object_get_iter(obj.as_ptr());
         if iter.is_null() {
+            api.clear_error();
             api.release_gil(gil);
             return Err(magnus::Error::new(
                 ruby_helpers::type_error(),

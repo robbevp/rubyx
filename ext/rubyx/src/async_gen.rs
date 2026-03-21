@@ -73,6 +73,7 @@ impl AsyncGeneratorStream {
         } else {
             let py_iter = api.object_get_iter(py_obj);
             if py_iter.is_null() {
+                api.clear_error();
                 Err("Object is not iterable".to_string())
             } else {
                 Ok(Self::from_sync_iterator(py_iter))
@@ -85,6 +86,7 @@ impl AsyncGeneratorStream {
     fn from_async_via_adapter(async_gen: *mut PyObject, api: &PythonApi) -> Result<Self, String> {
         let sync_iter = api.wrap_async_generator(async_gen);
         if sync_iter.is_null() {
+            api.clear_error();
             return Err("Failed to wrap async generator".to_string());
         }
         Ok(Self::from_sync_iterator(sync_iter))
