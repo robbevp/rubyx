@@ -69,6 +69,7 @@ impl Drop for PipeNotify {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::sync::Arc;
 
     #[test]
@@ -194,6 +195,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_drop_closes_fds() {
         let pipe = PipeNotify::new().unwrap();
         let read_fd = pipe.read_fd;
