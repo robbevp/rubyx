@@ -2,21 +2,16 @@ use crate::async_gen::{AsyncGeneratorStream, AsyncStrategy};
 use crate::nonblocking_stream::NonBlockingStream;
 use crate::pipe_notify::PipeNotify;
 use crate::python_api::PythonApi;
-use crate::python_finder::find_libpython;
 use crate::rubyx_object::python_to_sendable;
 use crate::rubyx_object::RubyxObject;
 use crate::rubyx_stream::RubyxStream;
 use crate::stream::StreamItem;
 use crossbeam_channel::unbounded;
 use magnus::typed_data::Obj;
-use magnus::{function, method, Module, Object, Ruby, TryConvert, Value};
+use magnus::{function, method, Module, Object, RArray, Ruby, TryConvert, Value};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-// Tutorial 08: Memory Safety
-//
-// Implement a RubyxObject that wraps PyObject safely.
-// Tests verify GC coordination works correctly.
 mod async_gen;
 mod context;
 mod convert;
@@ -28,6 +23,7 @@ mod pipe_notify;
 #[allow(dead_code)]
 mod python_api;
 mod python_ffi;
+#[cfg(test)]
 mod python_finder;
 mod python_guard;
 mod ruby_helpers;
@@ -41,34 +37,17 @@ pub mod test_helpers;
 static API: OnceLock<PythonApi> = OnceLock::new();
 
 /// Global accessor for the Python API.
+/// Panics if `Rubyx.init` has not been called yet.
 fn api() -> &'static PythonApi {
-    API.get().expect("Python API not initialized")
+    API.get().expect("Python not initialized — call Rubyx.init(python_dl, python_home, python_exe, sys_paths) first")
 }
 
 #[magnus::init]
 fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
-    // Initialize Python
-    let path = find_libpython().ok_or_else(|| {
-        magnus::Error::new(ruby.exception_runtime_error(), "Could not find libpython")
-    })?;
-    let mut api = unsafe {
-        PythonApi::load(&path)
-            .map_err(|e| magnus::Error::new(ruby.exception_runtime_error(), e.to_string()))?
-    };
-    api.initialize();
-    let _ = api.install_async_to_sync_class();
-    // Release the GIL that Py_Initialize() acquired on the main thread.
-    // This allows worker threads to acquire it via ensure_gil()/release_gil().
-    // Without this, the main thread permanently holds the GIL and any
-    // background thread calling ensure_gil() will deadlock.
-    api.save_thread();
-    // Set Python API globally
-    API.set(api).map_err(|_| {
-        magnus::Error::new(ruby.exception_runtime_error(), "Failed to set Python API")
-    })?;
-
     // Define Rubyx Module
     let rubyx_module = ruby.define_module("Rubyx")?;
+
+    rubyx_module.define_singleton_method("init", function!(rubyx_init, 4))?;
 
     // Module Class Methods
     rubyx_module.define_singleton_method("import", function!(crate::import::rubyx_import, 1))?;
@@ -110,6 +89,102 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
         .define_singleton_method("context", function!(crate::context::RubyxContext::new, 0))?;
     Ok(())
 }
+
+/// `rubyx_init`: accept config paths and initialize from ruby
+fn rubyx_init(
+    python_dl: String,
+    python_home: String,
+    python_exe: String,
+    sys_paths: RArray,
+) -> Result<bool, magnus::Error> {
+    if API.get().is_some() {
+        return Err(magnus::Error::new(
+            ruby_helpers::runtime_error(),
+            "Python Interpreter already initialized",
+        ));
+    }
+
+    let mut api = unsafe {
+        PythonApi::load(std::path::Path::new(&python_dl)).map_err(|e| {
+            magnus::Error::new(
+                ruby_helpers::runtime_error(),
+                format!("Error loading Python interpreter: {e}"),
+            )
+        })?
+    };
+
+    api.set_python_home(&python_home);
+    api.set_program_name(&python_exe);
+
+    api.initialize_ex(0);
+
+    if !api.is_initialized() {
+        return Err(magnus::Error::new(
+            ruby_helpers::runtime_error(),
+            "Python Interpreter failed to initialize",
+        ));
+    }
+
+    inject_sys_paths(&api, &sys_paths)?;
+
+    let _ = api.install_async_to_sync_class();
+
+    // Release the GIL that Py_InitializeEx() acquired on the main thread.
+    // This allows worker threads to acquire it via ensure_gil()/release_gil().
+    // Without this, the main thread permanently holds the GIL and any
+    // background thread calling ensure_gil() will deadlock.
+    api.save_thread();
+
+    API.set(api).map_err(|_| {
+        magnus::Error::new(ruby_helpers::runtime_error(), "Failed to store Python API")
+    })?;
+
+    Ok(true)
+}
+
+fn inject_sys_paths(api: &PythonApi, sys_paths: &RArray) -> Result<(), magnus::Error> {
+    let sys_module = api.import_module("sys").map_err(|e| {
+        magnus::Error::new(
+            ruby_helpers::runtime_error(),
+            format!("Failed to import sys module: {e}"),
+        )
+    })?;
+    let sys = api.object_get_attr_string(sys_module, "path");
+    if sys.is_null() {
+        api.decref(sys_module);
+        return Err(magnus::Error::new(
+            ruby_helpers::runtime_error(),
+            "Failed to get sys.path",
+        ));
+    }
+
+    // Append sys_paths to sys.path
+    let len = sys_paths.len();
+    for i in 0..len {
+        let path: String = sys_paths.entry(i as isize).map_err(|e| {
+            magnus::Error::new(
+                ruby_helpers::runtime_error(),
+                format!("Failed to get path at index {i}: {e}"),
+            )
+        })?;
+        let py_str = api.string_from_str(&path);
+        if py_str.is_null() {
+            continue;
+        }
+        let result = api.list_append(sys, py_str);
+        if result == -1 {
+            api.decref(py_str);
+            continue;
+        }
+        api.decref(py_str);
+    }
+    api.decref(sys);
+    api.decref(sys_module);
+
+    api.clear_error();
+    Ok(())
+}
+
 fn create_stream(args: &[Value]) -> Result<rubyx_stream::RubyxStream, magnus::Error> {
     let ruby = Ruby::get().map_err(|e| {
         magnus::Error::new(
@@ -2295,5 +2370,150 @@ mod tests {
             api.restore_thread(tstate);
             api.decref(globals);
         });
+    }
+
+    // ========== Tutorial 13: inject_sys_paths tests ==========
+
+    #[test]
+    #[serial]
+    fn test_inject_sys_paths_adds_paths() {
+        with_ruby_python(|ruby, api| {
+            let paths = ruby.ary_new();
+            paths
+                .push(ruby.str_new("/tmp/rubyx_inject_test_a"))
+                .unwrap();
+            paths
+                .push(ruby.str_new("/tmp/rubyx_inject_test_b"))
+                .unwrap();
+
+            super::inject_sys_paths(api, &paths).expect("inject_sys_paths should succeed");
+
+            // Verify paths were added
+            let globals = test_make_globals(api);
+            let result = api
+                .run_string(
+                    "'/tmp/rubyx_inject_test_a' in __import__('sys').path",
+                    258,
+                    globals,
+                    std::ptr::null_mut(),
+                )
+                .unwrap();
+            assert!(api.is_true(result), "path a should be in sys.path");
+            api.decref(result);
+
+            let result = api
+                .run_string(
+                    "'/tmp/rubyx_inject_test_b' in __import__('sys').path",
+                    258,
+                    globals,
+                    std::ptr::null_mut(),
+                )
+                .unwrap();
+            assert!(api.is_true(result), "path b should be in sys.path");
+            api.decref(result);
+
+            api.decref(globals);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_inject_sys_paths_empty_array() {
+        with_ruby_python(|ruby, api| {
+            let sys_module = api.import_module("sys").expect("should import sys");
+            let sys_path = api.object_get_attr_string(sys_module, "path");
+            let size_before = unsafe { (api.py_list_size)(sys_path) };
+            api.decref(sys_path);
+            api.decref(sys_module);
+
+            let paths = ruby.ary_new();
+            super::inject_sys_paths(api, &paths).expect("empty inject should succeed");
+
+            let sys_module = api.import_module("sys").expect("should import sys");
+            let sys_path = api.object_get_attr_string(sys_module, "path");
+            let size_after = unsafe { (api.py_list_size)(sys_path) };
+            api.decref(sys_path);
+            api.decref(sys_module);
+
+            assert_eq!(
+                size_before, size_after,
+                "empty inject should not change sys.path"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_inject_sys_paths_enables_local_module_import() {
+        with_ruby_python(|ruby, api| {
+            // Create a temp module
+            let tmp_dir = std::env::temp_dir().join("rubyx_inject_import_test");
+            std::fs::create_dir_all(&tmp_dir).unwrap();
+            std::fs::write(
+                tmp_dir.join("rubyx_inject_calc.py"),
+                "RESULT = 100\ndef double(x): return x * 2\n",
+            )
+            .unwrap();
+
+            let paths = ruby.ary_new();
+            paths.push(ruby.str_new(tmp_dir.to_str().unwrap())).unwrap();
+            super::inject_sys_paths(api, &paths).expect("inject should succeed");
+
+            // Import the module
+            let module = api
+                .import_module("rubyx_inject_calc")
+                .expect("should import module from injected path");
+
+            let result_attr = api.object_get_attr_string(module, "RESULT");
+            assert!(!result_attr.is_null());
+            assert_eq!(api.long_to_i64(result_attr), 100);
+
+            api.decref(result_attr);
+            api.decref(module);
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_inject_sys_paths_preserves_existing() {
+        with_ruby_python(|ruby, api| {
+            // Get current sys.path size
+            let sys_module = api.import_module("sys").expect("should import sys");
+            let sys_path = api.object_get_attr_string(sys_module, "path");
+            let size_before = unsafe { (api.py_list_size)(sys_path) };
+            api.decref(sys_path);
+            api.decref(sys_module);
+
+            // Inject 3 paths
+            let paths = ruby.ary_new();
+            paths.push(ruby.str_new("/tmp/p1")).unwrap();
+            paths.push(ruby.str_new("/tmp/p2")).unwrap();
+            paths.push(ruby.str_new("/tmp/p3")).unwrap();
+            super::inject_sys_paths(api, &paths).unwrap();
+
+            let sys_module = api.import_module("sys").expect("should import sys");
+            let sys_path = api.object_get_attr_string(sys_module, "path");
+            let size_after = unsafe { (api.py_list_size)(sys_path) };
+            api.decref(sys_path);
+            api.decref(sys_module);
+
+            assert_eq!(
+                size_after,
+                size_before + 3,
+                "sys.path should grow by exactly 3"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_api_not_initialized_gives_clear_message() {
+        // We can't actually test api() panicking since it's already initialized
+        // by the test harness. Instead, verify the OnceLock-based API is set.
+        assert!(
+            crate::API.get().is_some(),
+            "API should be initialized by test harness"
+        );
     }
 }

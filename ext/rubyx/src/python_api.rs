@@ -2,6 +2,7 @@ use crate::exception::PythonException;
 use crate::python_ffi::PyObject;
 use crate::python_ffi::*;
 use crate::python_guard::PyGuard;
+use libc::wchar_t;
 use libloading::{Library, Symbol};
 use std::ffi::{c_char, c_double, c_int, CString};
 use std::path::Path;
@@ -10,6 +11,7 @@ pub struct PythonApi {
     _lib: Library,
 
     py_initialize: Symbol<'static, unsafe extern "C" fn()>,
+    pub(crate) py_initialize_ex: Symbol<'static, unsafe extern "C" fn(init_sigs: c_int)>,
     py_finalize: Symbol<'static, unsafe extern "C" fn()>,
     py_is_initialized: Symbol<'static, unsafe extern "C" fn() -> c_int>,
     // None
@@ -70,6 +72,8 @@ pub struct PythonApi {
         Symbol<'static, unsafe extern "C" fn(*mut PyObject, isize) -> *mut PyObject>,
     pub py_list_set_item:
         Symbol<'static, unsafe extern "C" fn(*mut PyObject, isize, *mut PyObject) -> c_int>,
+    pub py_list_append:
+        Symbol<'static, unsafe extern "C" fn(list: *mut PyObject, item: *mut PyObject) -> c_int>,
     pub py_list_type: *mut PyObject,
 
     // Dict
@@ -159,6 +163,8 @@ pub struct PythonApi {
     // Import Module
     py_import_import_module:
         Symbol<'static, unsafe extern "C" fn(name: *const c_char) -> *mut PyObject>,
+    py_set_python_home: Symbol<'static, unsafe extern "C" fn(home: *const wchar_t)>,
+    py_set_program_name: Symbol<'static, unsafe extern "C" fn(name: *const wchar_t)>,
 
     // GIL and thread state
     py_eval_save_thread: Symbol<'static, unsafe extern "C" fn() -> *mut PyThreadState>,
@@ -188,6 +194,7 @@ impl PythonApi {
         #[cfg(not(unix))]
         let lib = Library::new(path)?;
         let py_initialize: Symbol<unsafe extern "C" fn()> = lib.get(b"Py_Initialize")?;
+        let py_initialize_ex: Symbol<unsafe extern "C" fn(c_int)> = lib.get(b"Py_InitializeEx")?;
         let py_finalize: Symbol<unsafe extern "C" fn()> = lib.get(b"Py_Finalize")?;
         let py_is_initialized: Symbol<unsafe extern "C" fn() -> c_int> =
             lib.get(b"Py_IsInitialized")?;
@@ -250,6 +257,8 @@ impl PythonApi {
             lib.get(b"PyList_New")?;
         let py_list_size: Symbol<unsafe extern "C" fn(*mut PyObject) -> isize> =
             lib.get(b"PyList_Size")?;
+        let py_list_append: Symbol<unsafe extern "C" fn(*mut PyObject, *mut PyObject) -> c_int> =
+            lib.get(b"PyList_Append")?;
         let py_list_set_item: Symbol<
             unsafe extern "C" fn(*mut PyObject, isize, *mut PyObject) -> c_int,
         > = lib.get(b"PyList_SetItem")?;
@@ -349,6 +358,10 @@ impl PythonApi {
         // Import Module
         let py_import_module: Symbol<unsafe extern "C" fn(*const c_char) -> *mut PyObject> =
             lib.get(b"PyImport_ImportModule")?;
+        let py_set_python_home: Symbol<unsafe extern "C" fn(*const wchar_t)> =
+            lib.get(b"Py_SetPythonHome")?;
+        let py_set_program_name: Symbol<unsafe extern "C" fn(*const wchar_t)> =
+            lib.get(b"Py_SetProgramName")?;
 
         let py_eval_save_thread: Symbol<unsafe extern "C" fn() -> *mut PyThreadState> =
             lib.get(b"PyEval_SaveThread")?;
@@ -369,6 +382,7 @@ impl PythonApi {
 
         let api = Self {
             py_initialize: std::mem::transmute(py_initialize),
+            py_initialize_ex: std::mem::transmute(py_initialize_ex),
             py_finalize: std::mem::transmute(py_finalize),
             py_is_initialized: std::mem::transmute(py_is_initialized),
             py_run_simple_string: std::mem::transmute(py_run_simple_string),
@@ -398,6 +412,7 @@ impl PythonApi {
             py_list_new: std::mem::transmute(py_list_new),
             py_list_set_item: std::mem::transmute(py_list_set_item),
             py_list_get_item: std::mem::transmute(py_list_get_item),
+            py_list_append: std::mem::transmute(py_list_append),
             py_list_type,
             py_list_size: std::mem::transmute(py_list_size),
             // Dict
@@ -429,6 +444,8 @@ impl PythonApi {
             py_object_get_iter: std::mem::transmute(py_object_get_iter),
             py_err_print: std::mem::transmute(py_err_print),
             py_import_import_module: std::mem::transmute(py_import_module),
+            py_set_python_home: std::mem::transmute(py_set_python_home),
+            py_set_program_name: std::mem::transmute(py_set_program_name),
             py_eval_save_thread: std::mem::transmute(py_eval_save_thread),
             py_eval_restore_thread: std::mem::transmute(py_eval_restore_thread),
             py_gilstate_ensure: std::mem::transmute(py_gilstate_ensure),
@@ -446,12 +463,36 @@ impl PythonApi {
         unsafe { (self.py_initialize)() }
     }
 
+    /// Initialize Python without registering signal handlers.
+    /// Pass 0 to avoid interfering with Ruby's signal handling.
+    pub fn initialize_ex(&self, initsigs: c_int) {
+        unsafe { (self.py_initialize_ex)(initsigs) }
+    }
+
     pub fn finalize(&self) {
         unsafe { (self.py_finalize)() }
     }
 
     pub fn is_initialized(&self) -> bool {
         unsafe { (self.py_is_initialized)() != 0 }
+    }
+
+    fn str_to_wchar(s: &str) -> Vec<wchar_t> {
+        let mut wide: Vec<wchar_t> = s.chars().map(|c| c as wchar_t).collect();
+        wide.push(0);
+        wide
+    }
+
+    pub fn set_python_home(&self, home: &str) {
+        let wide = Self::str_to_wchar(home);
+        let ptr = Box::leak(wide.into_boxed_slice()).as_ptr();
+        unsafe { (self.py_set_python_home)(ptr) }
+    }
+
+    pub fn set_program_name(&self, name: &str) {
+        let wide = Self::str_to_wchar(name);
+        let ptr = Box::leak(wide.into_boxed_slice()).as_ptr();
+        unsafe { (self.py_set_program_name)(ptr) }
     }
 
     pub fn run_simple_string(&self, code: &str) -> Result<(), String> {
@@ -659,6 +700,13 @@ impl PythonApi {
 
     pub fn list_get_item(&self, list: *mut PyObject, index: isize) -> *mut PyObject {
         unsafe { (self.py_list_get_item)(list, index) }
+    }
+
+    pub fn list_append(&self, list: *mut PyObject, value: *mut PyObject) -> c_int {
+        if list.is_null() {
+            return -1;
+        }
+        unsafe { (self.py_list_append)(list, value) }
     }
 
     pub fn list_check(&self, obj: *mut PyObject) -> bool {
@@ -5060,5 +5108,396 @@ _loop = asyncio.new_event_loop()
         api.decref(py_iter);
         api.decref(sync_iter);
         api.decref(globals);
+    }
+
+    // ========== Tutorial 13: str_to_wchar tests ==========
+
+    #[test]
+    #[serial]
+    fn test_str_to_wchar_ascii() {
+        let wide = PythonApi::str_to_wchar("hello");
+        assert_eq!(wide.len(), 6); // 5 chars + null terminator
+        assert_eq!(wide[0], 'h' as wchar_t);
+        assert_eq!(wide[1], 'e' as wchar_t);
+        assert_eq!(wide[2], 'l' as wchar_t);
+        assert_eq!(wide[3], 'l' as wchar_t);
+        assert_eq!(wide[4], 'o' as wchar_t);
+        assert_eq!(wide[5], 0); // null terminator
+    }
+
+    #[test]
+    #[serial]
+    fn test_str_to_wchar_empty() {
+        let wide = PythonApi::str_to_wchar("");
+        assert_eq!(wide.len(), 1); // just null terminator
+        assert_eq!(wide[0], 0);
+    }
+
+    #[test]
+    #[serial]
+    fn test_str_to_wchar_unicode() {
+        let wide = PythonApi::str_to_wchar("héllo");
+        assert_eq!(wide.len(), 6); // 5 chars + null
+        assert_eq!(wide[0], 'h' as wchar_t);
+        assert_eq!(wide[1], 'é' as wchar_t);
+        assert_eq!(wide[4], 'o' as wchar_t);
+        assert_eq!(wide[5], 0);
+    }
+
+    #[test]
+    #[serial]
+    fn test_str_to_wchar_cjk() {
+        let wide = PythonApi::str_to_wchar("日本語");
+        assert_eq!(wide.len(), 4); // 3 chars + null
+        assert_eq!(wide[0], '日' as wchar_t);
+        assert_eq!(wide[1], '本' as wchar_t);
+        assert_eq!(wide[2], '語' as wchar_t);
+        assert_eq!(wide[3], 0);
+    }
+
+    #[test]
+    #[serial]
+    fn test_str_to_wchar_emoji() {
+        let wide = PythonApi::str_to_wchar("🦀");
+        assert_eq!(wide.len(), 2); // 1 char + null
+        assert_eq!(wide[0], '🦀' as wchar_t);
+        assert_eq!(wide[1], 0);
+    }
+
+    #[test]
+    #[serial]
+    fn test_str_to_wchar_path() {
+        let wide = PythonApi::str_to_wchar("/home/user/.venv/lib/python3.13");
+        assert_eq!(wide[0], '/' as wchar_t);
+        assert_eq!(*wide.last().unwrap(), 0); // null terminated
+        assert_eq!(wide.len(), 32); // 31 chars + null
+    }
+
+    // ========== Tutorial 13: list_append tests ==========
+
+    #[test]
+    #[serial]
+    fn test_list_append_adds_item() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let list = unsafe { (api.py_list_new)(0) };
+        assert!(!list.is_null());
+
+        let item = api.long_from_i64(42);
+        let result = api.list_append(list, item);
+        assert_eq!(result, 0, "list_append should return 0 on success");
+
+        let size = unsafe { (api.py_list_size)(list) };
+        assert_eq!(size, 1, "list should have 1 element");
+
+        api.decref(item);
+        api.decref(list);
+    }
+
+    #[test]
+    #[serial]
+    fn test_list_append_multiple_items() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let list = unsafe { (api.py_list_new)(0) };
+        for i in 0..5 {
+            let item = api.long_from_i64(i);
+            api.list_append(list, item);
+            api.decref(item);
+        }
+
+        let size = unsafe { (api.py_list_size)(list) };
+        assert_eq!(size, 5, "list should have 5 elements");
+
+        // Verify order is preserved
+        for i in 0..5isize {
+            let item = unsafe { (api.py_list_get_item)(list, i) };
+            assert_eq!(api.long_to_i64(item), i as i64);
+            // py_list_get_item returns a borrowed reference, don't decref
+        }
+
+        api.decref(list);
+    }
+
+    #[test]
+    #[serial]
+    fn test_list_append_mixed_types() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let list = unsafe { (api.py_list_new)(0) };
+
+        let int_val = api.long_from_i64(99);
+        let str_val = api.string_from_str("hello");
+        let float_val = api.float_from_f64(3.14);
+
+        api.list_append(list, int_val);
+        api.list_append(list, str_val);
+        api.list_append(list, float_val);
+
+        let size = unsafe { (api.py_list_size)(list) };
+        assert_eq!(size, 3);
+
+        let item0 = unsafe { (api.py_list_get_item)(list, 0) };
+        assert!(api.is_long(item0));
+        assert_eq!(api.long_to_i64(item0), 99);
+
+        let item1 = unsafe { (api.py_list_get_item)(list, 1) };
+        assert!(api.is_string(item1));
+        assert_eq!(api.string_to_string(item1).unwrap(), "hello");
+
+        let item2 = unsafe { (api.py_list_get_item)(list, 2) };
+        assert!(api.is_float(item2));
+        assert!((api.float_to_f64(item2) - 3.14).abs() < 0.001);
+
+        api.decref(int_val);
+        api.decref(str_val);
+        api.decref(float_val);
+        api.decref(list);
+    }
+
+    #[test]
+    #[serial]
+    fn test_list_append_null_list_returns_error() {
+        let Some(_guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = _guard.api();
+
+        let item = api.long_from_i64(1);
+        let result = api.list_append(std::ptr::null_mut(), item);
+        assert_eq!(result, -1, "appending to null list should return -1");
+        api.decref(item);
+    }
+
+    #[test]
+    #[serial]
+    fn test_list_append_to_empty_list() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let list = unsafe { (api.py_list_new)(0) };
+        let size_before = unsafe { (api.py_list_size)(list) };
+        assert_eq!(size_before, 0);
+
+        let item = api.string_from_str("first");
+        api.list_append(list, item);
+
+        let size_after = unsafe { (api.py_list_size)(list) };
+        assert_eq!(size_after, 1);
+
+        api.decref(item);
+        api.decref(list);
+    }
+
+    // ========== Tutorial 13: initialize_ex tests ==========
+
+    #[test]
+    #[serial]
+    fn test_initialize_ex_already_initialized() {
+        // Python is already initialized by the test harness.
+        // Calling initialize_ex again should be safe (Python docs say it's a no-op).
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        api.initialize_ex(0);
+        assert!(
+            api.is_initialized(),
+            "Python should still be initialized after redundant initialize_ex"
+        );
+    }
+
+    // ========== Tutorial 13: sys.path injection via Python ==========
+
+    #[test]
+    #[serial]
+    fn test_sys_path_injection_via_python() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let test_path = "/tmp/rubyx_test_inject_path";
+
+        // Import sys
+        let sys_module = api.import_module("sys").expect("should import sys");
+        let sys_path = api.object_get_attr_string(sys_module, "path");
+        assert!(!sys_path.is_null(), "sys.path should not be null");
+
+        // Append a test path
+        let py_path = api.string_from_str(test_path);
+        assert!(!py_path.is_null());
+        let result = api.list_append(sys_path, py_path);
+        assert_eq!(result, 0, "list_append to sys.path should succeed");
+
+        // Verify the path is in sys.path by evaluating Python code
+        let globals = make_globals(api);
+        let check_code = format!("'{}' in __import__('sys').path", test_path);
+        let py_result = api
+            .run_string(&check_code, PY_EVAL_INPUT, globals, std::ptr::null_mut())
+            .expect("eval should succeed");
+        assert!(
+            api.is_true(py_result),
+            "injected path should be found in sys.path"
+        );
+
+        api.decref(py_result);
+        api.decref(globals);
+        api.decref(py_path);
+        api.decref(sys_path);
+        api.decref(sys_module);
+    }
+
+    #[test]
+    #[serial]
+    fn test_sys_path_injection_multiple_paths() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let paths = [
+            "/tmp/rubyx_multi_a",
+            "/tmp/rubyx_multi_b",
+            "/tmp/rubyx_multi_c",
+        ];
+
+        let sys_module = api.import_module("sys").expect("should import sys");
+        let sys_path = api.object_get_attr_string(sys_module, "path");
+
+        for path in &paths {
+            let py_str = api.string_from_str(path);
+            api.list_append(sys_path, py_str);
+            api.decref(py_str);
+        }
+
+        // Verify all paths were added
+        let globals = make_globals(api);
+        for path in &paths {
+            let check = format!("'{}' in __import__('sys').path", path);
+            let result = api
+                .run_string(&check, PY_EVAL_INPUT, globals, std::ptr::null_mut())
+                .expect("eval should succeed");
+            assert!(api.is_true(result), "path {} should be in sys.path", path);
+            api.decref(result);
+        }
+
+        api.decref(globals);
+        api.decref(sys_path);
+        api.decref(sys_module);
+    }
+
+    #[test]
+    #[serial]
+    fn test_sys_path_injection_preserves_existing_paths() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let sys_module = api.import_module("sys").expect("should import sys");
+        let sys_path = api.object_get_attr_string(sys_module, "path");
+        let size_before = unsafe { (api.py_list_size)(sys_path) };
+
+        let py_str = api.string_from_str("/tmp/rubyx_preserve_test");
+        api.list_append(sys_path, py_str);
+        api.decref(py_str);
+
+        let size_after = unsafe { (api.py_list_size)(sys_path) };
+        assert_eq!(
+            size_after,
+            size_before + 1,
+            "sys.path should grow by exactly 1"
+        );
+
+        api.decref(sys_path);
+        api.decref(sys_module);
+    }
+
+    #[test]
+    #[serial]
+    fn test_import_module_from_injected_path() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        // Create a temporary Python module
+        let tmp_dir = std::env::temp_dir().join("rubyx_test_modules");
+        std::fs::create_dir_all(&tmp_dir).expect("should create temp dir");
+        let module_path = tmp_dir.join("rubyx_test_mod.py");
+        std::fs::write(&module_path, "VALUE = 42\ndef add(a, b): return a + b\n")
+            .expect("should write test module");
+
+        // Inject the temp directory into sys.path
+        let sys_module = api.import_module("sys").expect("should import sys");
+        let sys_path = api.object_get_attr_string(sys_module, "path");
+        let py_dir = api.string_from_str(tmp_dir.to_str().unwrap());
+        api.list_append(sys_path, py_dir);
+        api.decref(py_dir);
+
+        // Now import the module
+        let module = api
+            .import_module("rubyx_test_mod")
+            .expect("should import test module from injected path");
+        assert!(!module.is_null());
+
+        // Verify module attribute
+        let value_attr = api.object_get_attr_string(module, "VALUE");
+        assert!(!value_attr.is_null());
+        assert_eq!(api.long_to_i64(value_attr), 42);
+
+        // Verify module function
+        let add_fn = api.object_get_attr_string(module, "add");
+        assert!(!add_fn.is_null());
+        assert!(api.callable_check(add_fn) != 0);
+
+        // Call add(3, 4) and verify result
+        let args = unsafe { (api.py_tuple_new)(2) };
+        let arg1 = api.long_from_i64(3);
+        let arg2 = api.long_from_i64(4);
+        unsafe {
+            (api.py_tuple_set_item)(args, 0, arg1);
+            (api.py_tuple_set_item)(args, 1, arg2);
+        }
+        let result = api.object_call(add_fn, args, std::ptr::null_mut());
+        assert!(!result.is_null());
+        assert_eq!(api.long_to_i64(result), 7);
+
+        api.decref(result);
+        api.decref(args);
+        api.decref(add_fn);
+        api.decref(value_attr);
+        api.decref(module);
+        api.decref(sys_path);
+        api.decref(sys_module);
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    #[serial]
+    fn test_import_fails_without_sys_path_injection() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        // Try importing a module that definitely doesn't exist in default sys.path
+        let result = api.import_module("rubyx_nonexistent_module_xyz_123");
+        assert!(result.is_err(), "should fail to import nonexistent module");
     }
 }
