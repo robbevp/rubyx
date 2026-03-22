@@ -744,7 +744,10 @@ mod tests {
         with_ruby_python(|_ruby, api| {
             let module = api.import_module("os").expect("os should import");
             let wrapper = RubyxObject::new(module, api).unwrap();
-            assert!(wrapper.to_ruby().is_err(), "module should not convert to Ruby");
+            assert!(
+                wrapper.to_ruby().is_err(),
+                "module should not convert to Ruby"
+            );
             drop(wrapper);
             api.decref(module);
         });

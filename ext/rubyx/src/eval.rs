@@ -3,7 +3,8 @@ use crate::python_ffi::PyObject;
 use crate::python_guard::PyGuard;
 use crate::ruby_helpers::runtime_error;
 use crate::rubyx_object::RubyxObject;
-use magnus::{Error, IntoValue, Ruby, Value};
+use magnus::typed_data::Obj;
+use magnus::{Error, IntoValue, Ruby, TryConvert, Value};
 
 /// Py_eval_input = 258 (for expressions)
 const PY_EVAL_INPUT: i64 = 258;
@@ -197,5 +198,86 @@ pub(crate) fn rubyx_eval(code: String) -> Result<Value, magnus::Error> {
     };
 
     api.release_gil(gil);
+    result
+}
+
+/// Run a Python coroutine with asyncio.run() and return the result.
+/// The coroutine must already be a PyObject (not code string).
+/// Caller must hold the GIL.
+fn run_asyncio(coroutine: *mut PyObject, api: &'static PythonApi) -> Result<Value, magnus::Error> {
+    let ruby = Ruby::get().map_err(|e| Error::new(runtime_error(), e.to_string()))?;
+
+    let asyncio = api
+        .import_module("asyncio")
+        .map_err(|e| Error::new(runtime_error(), e.to_string()))?;
+    let run_fn = api.object_get_attr_string(asyncio, "run");
+
+    if run_fn.is_null() {
+        api.clear_error();
+        api.decref(asyncio);
+        return Err(Error::new(runtime_error(), "asyncio.run not found"));
+    }
+
+    let args = unsafe { (api.py_tuple_new)(1) };
+    api.incref(coroutine);
+    unsafe { (api.py_tuple_set_item)(args, 0, coroutine) };
+
+    let result = api.object_call(run_fn, args, std::ptr::null_mut());
+    api.decref(args);
+    api.decref(run_fn);
+    api.decref(asyncio);
+
+    if result.is_null() {
+        let err = if let Some(exc) = PythonApi::extract_exception(api) {
+            exc.to_string()
+        } else {
+            "Python async call failed".to_string()
+        };
+        return Err(Error::new(runtime_error(), err));
+    }
+
+    let wrapper = RubyxObject::new(result, api)
+        .ok_or_else(|| Error::new(runtime_error(), "Failed to wrap async result"))?;
+
+    Ok(wrapper.into_value_with(&ruby))
+}
+
+/// Rubyx.await(coroutine) — takes a RubyxObject wrapping a Python coroutine,
+/// runs it with asyncio.run(), and returns the result.
+pub(crate) fn rubyx_await(coroutine: Value) -> Result<Value, magnus::Error> {
+    let obj = Obj::<RubyxObject>::try_convert(coroutine)?;
+    let api = crate::api();
+    let gil = api.ensure_gil();
+
+    let result = run_asyncio(obj.as_ptr(), api);
+
+    api.release_gil(gil);
+    result
+}
+
+/// Eval code in context globals to get a coroutine, then run it with asyncio.run().
+/// Used by RubyxContext#await.
+pub(crate) fn await_eval_with_globals(
+    code: &str,
+    globals: *mut PyObject,
+    api: &'static PythonApi,
+) -> Result<Value, magnus::Error> {
+    let py_coroutine = match api.run_string(code, PY_EVAL_INPUT, globals, globals) {
+        Ok(obj) if !obj.is_null() => obj,
+        Ok(_) => {
+            let err = if api.has_error() {
+                PythonApi::extract_exception(api)
+                    .map(Error::from)
+                    .unwrap_or_else(|| Error::new(runtime_error(), "Python eval failed"))
+            } else {
+                Error::new(runtime_error(), "Python eval returned null")
+            };
+            return Err(err);
+        }
+        Err(e) => return Err(Error::new(runtime_error(), e)),
+    };
+
+    let result = run_asyncio(py_coroutine, api);
+    api.decref(py_coroutine);
     result
 }

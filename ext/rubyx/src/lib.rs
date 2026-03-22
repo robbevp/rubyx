@@ -17,6 +17,7 @@ mod context;
 mod convert;
 mod eval;
 mod exception;
+mod future;
 mod import;
 mod nonblocking_stream;
 mod pipe_notify;
@@ -52,6 +53,8 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
     // Module Class Methods
     rubyx_module.define_singleton_method("_import", function!(crate::import::rubyx_import, 1))?;
     rubyx_module.define_singleton_method("_eval", function!(crate::eval::rubyx_eval, 1))?;
+    rubyx_module.define_singleton_method("await", function!(crate::eval::rubyx_await, 1))?;
+    rubyx_module.define_singleton_method("async_await", function!(rubyx_async_await, 1))?;
 
     // RubyxObject class for wrapped Python objects
     let py_object = ruby.define_class("RubyxObject", ruby.class_object())?;
@@ -98,9 +101,41 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
     context_class
         .define_singleton_method("new", function!(crate::context::RubyxContext::new, 0))?;
     context_class.define_method("eval", method!(crate::context::RubyxContext::eval, 1))?;
+    context_class.define_method(
+        "await",
+        method!(crate::context::RubyxContext::await_eval, 1),
+    )?;
+    context_class.define_method(
+        "async_await",
+        method!(crate::context::RubyxContext::async_await_eval, 1),
+    )?;
     rubyx_module
         .define_singleton_method("context", function!(crate::context::RubyxContext::new, 0))?;
+
+    // Rubyx::Future class
+    let future_class = rubyx_module.define_class("Future", ruby.class_object())?;
+    future_class.define_method("value", method!(crate::future::RubyxFuture::value, 0))?;
+    future_class.define_method("ready?", method!(crate::future::RubyxFuture::is_ready, 0))?;
+
     Ok(())
+}
+
+/// Rubyx.async_await(coroutine) — runs a Python coroutine on a background thread.
+/// Returns a Rubyx::Future immediately. Call future.value to get the result.
+fn rubyx_async_await(coroutine: Value) -> Result<future::RubyxFuture, magnus::Error> {
+    let obj = Obj::<RubyxObject>::try_convert(coroutine).map_err(|_| {
+        magnus::Error::new(
+            ruby_helpers::type_error(),
+            "Rubyx.async_await requires a Python coroutine (RubyxObject)",
+        )
+    })?;
+    let api = crate::api();
+    let gil = api.ensure_gil();
+
+    let future = future::RubyxFuture::from_coroutine(obj.as_ptr(), api);
+
+    api.release_gil(gil);
+    Ok(future)
 }
 
 /// `rubyx_init`: accept config paths and initialize from ruby
@@ -2520,12 +2555,14 @@ mod tests {
     #[test]
     #[serial]
     fn test_api_not_initialized_gives_clear_message() {
-        // We can't actually test api() panicking since it's already initialized
-        // by the test harness. Instead, verify the OnceLock-based API is set.
-        assert!(
-            crate::API.get().is_some(),
-            "API should be initialized by test harness"
-        );
+        // Skip if Python isn't available (the test harness couldn't find libpython)
+        if crate::API.get().is_none() {
+            println!("Skipping: Python not available");
+            return;
+        }
+        // If we get here, API was initialized — verify it works
+        let api = crate::api();
+        assert!(api.is_initialized());
     }
 
     // ========== to_s tests ==========
@@ -2575,7 +2612,10 @@ mod tests {
         let py_float = api.float_from_f64(3.14);
         let wrapper = RubyxObject::new(py_float, api).unwrap();
         let result = wrapper.to_s().expect("to_s should succeed");
-        assert!(result.starts_with("3.14"), "to_s of 3.14 should start with '3.14', got: {result}");
+        assert!(
+            result.starts_with("3.14"),
+            "to_s of 3.14 should start with '3.14', got: {result}"
+        );
 
         drop(wrapper);
         api.decref(py_float);
@@ -2824,9 +2864,18 @@ mod tests {
             // Result should be a Ruby array
             let arr = magnus::RArray::try_convert(result).expect("should be an Array");
             assert_eq!(arr.len(), 3);
-            assert_eq!(i64::try_convert(arr.entry::<magnus::Value>(0).unwrap()).unwrap(), 10);
-            assert_eq!(i64::try_convert(arr.entry::<magnus::Value>(1).unwrap()).unwrap(), 20);
-            assert_eq!(i64::try_convert(arr.entry::<magnus::Value>(2).unwrap()).unwrap(), 30);
+            assert_eq!(
+                i64::try_convert(arr.entry::<magnus::Value>(0).unwrap()).unwrap(),
+                10
+            );
+            assert_eq!(
+                i64::try_convert(arr.entry::<magnus::Value>(1).unwrap()).unwrap(),
+                20
+            );
+            assert_eq!(
+                i64::try_convert(arr.entry::<magnus::Value>(2).unwrap()).unwrap(),
+                30
+            );
 
             drop(wrapper);
             api.decref(list);
@@ -2898,5 +2947,253 @@ mod tests {
 
         drop(wrapper);
         api.decref(py_str);
+    }
+
+    // ========== Rubyx::Future / async_await tests ==========
+
+    /// Helper: define an async function in globals, create coroutine,
+    /// release GIL, run future, restore GIL, return result.
+    fn run_future_test(
+        api: &'static PythonApi,
+        func_def: &str,
+        call_expr: &str,
+    ) -> Result<magnus::Value, magnus::Error> {
+        let globals = make_globals(api);
+        api.run_string(func_def, PY_FILE_INPUT, globals, globals)
+            .expect("should define async function");
+
+        let coroutine = api
+            .run_string(call_expr, PY_EVAL_INPUT, globals, globals)
+            .expect("should create coroutine");
+
+        let tstate = api.save_thread();
+        let future = crate::future::RubyxFuture::from_coroutine(coroutine, api);
+        let result = future.value();
+        drop(future);
+        api.restore_thread(tstate);
+
+        api.decref(coroutine);
+        api.decref(globals);
+        result
+    }
+
+    #[test]
+    #[serial]
+    fn test_future_from_async_coroutine() {
+        with_ruby_python(|_ruby, api| {
+            let result = run_future_test(
+                api,
+                "import asyncio\nasync def simple(): return 42\n",
+                "simple()",
+            )
+            .expect("future should resolve");
+            assert_eq!(i64::try_convert(result).unwrap(), 42);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_future_from_async_returning_string() {
+        with_ruby_python(|_ruby, api| {
+            let result = run_future_test(
+                api,
+                "import asyncio\nasync def greet(): return 'hello async'\n",
+                "greet()",
+            )
+            .expect("future should resolve");
+            assert_eq!(String::try_convert(result).unwrap(), "hello async");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_future_from_async_returning_list() {
+        with_ruby_python(|_ruby, api| {
+            let result = run_future_test(
+                api,
+                "import asyncio\nasync def get_list(): return [10, 20, 30]\n",
+                "get_list()",
+            )
+            .expect("future should resolve");
+            let arr = magnus::RArray::try_convert(result).expect("should be array");
+            assert_eq!(arr.len(), 3);
+            assert_eq!(
+                i64::try_convert(arr.entry::<magnus::Value>(0).unwrap()).unwrap(),
+                10
+            );
+            assert_eq!(
+                i64::try_convert(arr.entry::<magnus::Value>(1).unwrap()).unwrap(),
+                20
+            );
+            assert_eq!(
+                i64::try_convert(arr.entry::<magnus::Value>(2).unwrap()).unwrap(),
+                30
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_future_from_async_returning_none() {
+        with_ruby_python(|_ruby, api| {
+            let result = run_future_test(api, "import asyncio\nasync def noop(): pass\n", "noop()")
+                .expect("future should resolve");
+            assert!(
+                magnus::value::ReprValue::is_nil(result),
+                "None should become nil"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_future_propagates_async_error() {
+        with_ruby_python(|_ruby, api| {
+            let result = run_future_test(
+                api,
+                "import asyncio\nasync def boom(): raise ValueError('async boom')\n",
+                "boom()",
+            );
+            assert!(result.is_err(), "async error should propagate");
+            let err_msg = format!("{}", result.unwrap_err());
+            assert!(err_msg.contains("async boom"), "got: {}", err_msg);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_future_with_await_in_coroutine() {
+        with_ruby_python(|_ruby, api| {
+            let result = run_future_test(
+                api,
+                "import asyncio\nasync def chained():\n    await asyncio.sleep(0.01)\n    return 'done'\n",
+                "chained()",
+            )
+            .expect("future should resolve");
+            assert_eq!(String::try_convert(result).unwrap(), "done");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_future_sequential_multiple() {
+        with_ruby_python(|_ruby, api| {
+            let r1 = run_future_test(
+                api,
+                "import asyncio\nasync def add(a, b): return a + b\n",
+                "add(1, 2)",
+            )
+            .expect("future1 should resolve");
+            assert_eq!(i64::try_convert(r1).unwrap(), 3);
+
+            let r2 = run_future_test(
+                api,
+                "import asyncio\nasync def add2(a, b): return a + b\n",
+                "add2(10, 20)",
+            )
+            .expect("future2 should resolve");
+            assert_eq!(i64::try_convert(r2).unwrap(), 30);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_future_drop_joins_thread() {
+        with_ruby_python(|_ruby, api| {
+            let globals = make_globals(api);
+            api.run_string(
+                "import asyncio\nasync def slow(): await asyncio.sleep(0.05); return 1\n",
+                PY_FILE_INPUT,
+                globals,
+                globals,
+            )
+            .expect("should define async function");
+
+            let coroutine = api
+                .run_string("slow()", PY_EVAL_INPUT, globals, globals)
+                .expect("should create coroutine");
+
+            let tstate = api.save_thread();
+            let future = crate::future::RubyxFuture::from_coroutine(coroutine, api);
+            drop(future); // Should not hang or crash
+            api.restore_thread(tstate);
+
+            api.decref(coroutine);
+            api.decref(globals);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_blocking_await_returns_rubyx_object() {
+        with_ruby_python(|ruby, api| {
+            let globals = make_globals(api);
+            api.run_string(
+                "import asyncio\nasync def get_val(): return 99\n",
+                PY_FILE_INPUT,
+                globals,
+                globals,
+            )
+            .expect("should define async function");
+
+            let coroutine = api
+                .run_string("get_val()", PY_EVAL_INPUT, globals, globals)
+                .expect("should create coroutine");
+
+            let wrapper = RubyxObject::new(coroutine, api).expect("should wrap coroutine");
+            let coro_value: magnus::Value = magnus::IntoValue::into_value_with(wrapper, ruby);
+            let result =
+                crate::eval::rubyx_await(coro_value).expect("blocking await should succeed");
+
+            let obj = magnus::typed_data::Obj::<RubyxObject>::try_convert(result)
+                .expect("should be RubyxObject");
+            assert_eq!(api.long_to_i64(obj.as_ptr()), 99);
+
+            api.decref(globals);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_await_eval_with_globals() {
+        with_ruby_python(|_ruby, api| {
+            let globals = make_globals(api);
+            api.run_string(
+                "import asyncio\nasync def double(n): return n * 2\n",
+                PY_FILE_INPUT,
+                globals,
+                globals,
+            )
+            .expect("should define async function");
+
+            let result = crate::eval::await_eval_with_globals("double(21)", globals, api)
+                .expect("await_eval should succeed");
+
+            let obj = magnus::typed_data::Obj::<RubyxObject>::try_convert(result)
+                .expect("should be RubyxObject");
+            assert_eq!(api.long_to_i64(obj.as_ptr()), 42);
+
+            api.decref(globals);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_await_eval_with_globals_error() {
+        with_ruby_python(|_ruby, api| {
+            let globals = make_globals(api);
+            api.run_string(
+                "import asyncio\nasync def fail(): raise RuntimeError('eval boom')\n",
+                PY_FILE_INPUT,
+                globals,
+                globals,
+            )
+            .expect("should define async function");
+
+            let result = crate::eval::await_eval_with_globals("fail()", globals, api);
+            assert!(result.is_err(), "should propagate error");
+
+            api.decref(globals);
+        });
     }
 }

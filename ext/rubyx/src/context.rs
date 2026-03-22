@@ -1,4 +1,4 @@
-use crate::eval::{eval_with_globals, make_globals};
+use crate::eval::{await_eval_with_globals, eval_with_globals, make_globals};
 use crate::python_api::PythonApi;
 use crate::python_ffi::PyObject;
 
@@ -29,6 +29,56 @@ impl RubyxContext {
         let result = eval_with_globals(&code, self.globals, self.api);
         self.api.release_gil(gil);
         result
+    }
+
+    pub(crate) fn await_eval(&self, code: String) -> Result<magnus::Value, magnus::Error> {
+        let gil = self.api.ensure_gil();
+        let result = await_eval_with_globals(&code, self.globals, self.api);
+        self.api.release_gil(gil);
+        result
+    }
+
+    /// Eval code to get a coroutine, then run it on a background thread.
+    /// Returns a Rubyx::Future immediately.
+    pub(crate) fn async_await_eval(
+        &self,
+        code: String,
+    ) -> Result<crate::future::RubyxFuture, magnus::Error> {
+        let gil = self.api.ensure_gil();
+
+        // Eval the code in context globals to get the coroutine
+        let py_coroutine = match self.api.run_string(&code, 258, self.globals, self.globals) {
+            Ok(obj) if !obj.is_null() => obj,
+            Ok(_) => {
+                let err = if self.api.has_error() {
+                    crate::python_api::PythonApi::extract_exception(self.api)
+                        .map(magnus::Error::from)
+                        .unwrap_or_else(|| {
+                            magnus::Error::new(
+                                crate::ruby_helpers::runtime_error(),
+                                "Python eval failed",
+                            )
+                        })
+                } else {
+                    magnus::Error::new(
+                        crate::ruby_helpers::runtime_error(),
+                        "Python eval returned null",
+                    )
+                };
+                self.api.release_gil(gil);
+                return Err(err);
+            }
+            Err(e) => {
+                self.api.release_gil(gil);
+                return Err(magnus::Error::new(crate::ruby_helpers::runtime_error(), e));
+            }
+        };
+
+        let future = crate::future::RubyxFuture::from_coroutine(py_coroutine, self.api);
+        self.api.decref(py_coroutine);
+        self.api.release_gil(gil);
+
+        Ok(future)
     }
 }
 
