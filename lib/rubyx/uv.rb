@@ -42,7 +42,7 @@ module Rubyx
           File.write(pyproject_path, pyproject_toml)
 
           success = run_uv!(
-            ['sync', '--managed-python', '--no-config', *uv_args],
+            ['sync', '--managed-python', '--no-config', '--project', proj_dir, *uv_args],
             chdir: proj_dir,
             env: { 'UV_PYTHON_INSTALL_DIR' => python_install_dir(uv_version) },
             uv_version: uv_version,

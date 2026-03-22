@@ -5,40 +5,21 @@
 #
 # Prerequisites:
 #   1. Build the extension: cargo build --release
-#   2. Run: ruby examples/calculator_demo.rb
+#   2. Run: ruby examples/calculator_data_demo.rb
 
 $LOAD_PATH.unshift File.expand_path('../lib', __dir__)
 require 'rubyx'
 
-# Auto-detect Python from .venv or system
-project_root = File.expand_path('..', __dir__)
-python3 = [
-  File.join(project_root, '.venv', 'bin', 'python3'),
-  `which python3 2>/dev/null`.strip,
-].find { |p| !p.empty? && File.exist?(p) }
-
-abort 'Python 3 not found' unless python3
-
-python_info = `#{python3} -c "
-import sysconfig, sys, os, platform
-libdir = sysconfig.get_config_var('LIBDIR')
-ver = f'{sys.version_info.major}.{sys.version_info.minor}'
-ext = 'dylib' if platform.system() == 'Darwin' else 'so'
-print(os.path.join(libdir, f'libpython{ver}.{ext}'))
-print(sys.base_prefix)
-print(sys.executable)
-" 2>/dev/null`.strip.split("\n")
-
-abort 'Could not detect Python paths' unless python_info.length == 3
-
-python_dl, python_home, python_exe = python_info
-sys_paths = `#{python3} -c "import site; print('\\n'.join(site.getsitepackages()))" 2>/dev/null`.strip.split("\n").reject(&:empty?)
-
-Rubyx.init(python_dl, python_home, python_exe, sys_paths)
-
-# Inject examples/python/ into sys.path
+# Initialize Python via UV
+# Use system uv if available, otherwise auto-download
 python_dir = File.expand_path('python', __dir__)
-Rubyx.eval("import sys; sys.path.insert(0, '#{python_dir}')")
+pyproject = File.read(File.join(python_dir, 'pyproject.toml'))
+
+system_uv = `which uv 2>/dev/null`.strip
+uv_opts = {}
+uv_opts[:uv_path] = system_uv if !system_uv.empty? && File.exist?(system_uv)
+
+Rubyx.uv_init(pyproject, project_dir: python_dir, **uv_opts)
 
 # --- Calculator module ---
 

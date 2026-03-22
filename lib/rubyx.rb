@@ -73,7 +73,10 @@ module Rubyx
   # @param options [Hash] Options passed to Uv.setup and Uv.init
   # @return [Hash] Resolved paths from Uv.init
   def self.uv_init(pyproject_toml, **options)
-    Uv.setup(pyproject_toml, **options)
-    Uv.init(pyproject_toml, **options)
+    setup_keys = %i[force uv_version project_dir uv_args uv_path]
+    init_keys = %i[uv_version project_dir]
+
+    Uv.setup(pyproject_toml, **options.slice(*setup_keys))
+    Uv.init(pyproject_toml, **options.slice(*init_keys))
   end
 end
