@@ -94,18 +94,18 @@ RSpec.describe 'Complete Integration', ruby_integration: true do
 
   describe 'local Python module imports' do
     before(:all) do
-      examples_dir = File.expand_path('../examples/python', __dir__)
+      examples_dir = File.expand_path('python', __dir__)
       if Dir.exist?(examples_dir)
         Rubyx.eval("import sys; sys.path.insert(0, '#{examples_dir}')")
       end
     end
 
-    it 'imports calculator module from examples/python' do
+    it 'imports calculator module from spec/python' do
       calc = Rubyx.import('calculator')
       expect(calc).to be_a(RubyxObject)
     end
 
-    it 'imports data_utils module from examples/python' do
+    it 'imports data_utils module from spec/python' do
       utils = Rubyx.import('data_utils')
       expect(utils).to be_a(RubyxObject)
     end
@@ -131,6 +131,67 @@ RSpec.describe 'Complete Integration', ruby_integration: true do
       gen = Rubyx.eval("import calculator\niter(calculator.fibonacci(8))")
       results = Rubyx.stream(gen).to_a
       expect(results).to eq([0, 1, 1, 2, 3, 5, 8, 13])
+    end
+  end
+
+  # ========== Nested Python module imports ==========
+
+  describe 'nested Python module imports' do
+    before(:all) do
+      examples_dir = File.expand_path('python', __dir__)
+      Rubyx.eval("import sys; sys.path.insert(0, '#{examples_dir}')") if Dir.exist?(examples_dir)
+    end
+
+    it 'imports a submodule with dotted name (ml.predictor)' do
+      predictor = Rubyx.import('ml.predictor')
+      expect(predictor).to be_a(RubyxObject)
+    end
+
+    it 'calls functions in a submodule' do
+      predictor = Rubyx.import('ml.predictor')
+      ctx = Rubyx.context
+      ctx.eval("import ml.predictor as pred")
+      gen = ctx.eval("iter([pred.classify(0.8)])")
+      result = Rubyx.stream(gen).first
+      expect(result).to eq('positive')
+    end
+
+    it 'calls functions returning numbers from submodule' do
+      ctx = Rubyx.context
+      ctx.eval("import ml.predictor as pred")
+      gen = ctx.eval("iter([pred.predict([10, 20, 30])])")
+      result = Rubyx.stream(gen).first
+      expect(result).to be_within(0.001).of(20.0)
+    end
+
+    it 'imports 3-level deep module (ml.utils.normalize)' do
+      norm = Rubyx.import('ml.utils.normalize')
+      expect(norm).to be_a(RubyxObject)
+    end
+
+    it 'calls functions in 3-level deep module' do
+      ctx = Rubyx.context
+      ctx.eval("from ml.utils.normalize import min_max")
+      gen = ctx.eval("iter(min_max([10, 20, 30]))")
+      results = Rubyx.stream(gen).to_a
+      expect(results).to eq([0.0, 0.5, 1.0])
+    end
+
+    it 'imports package __init__.py attributes' do
+      ctx = Rubyx.context
+      ctx.eval("import ml")
+      gen = ctx.eval("iter([ml.VERSION])")
+      result = Rubyx.stream(gen).first
+      expect(result).to eq('0.1.0')
+    end
+
+    it 'raises on nonexistent submodule' do
+      expect { Rubyx.import('ml.nonexistent_xyz') }.to raise_error(StandardError)
+    end
+
+    it 'raises on missing __init__.py (not a package)' do
+      # calculator.py exists as a file but not as a package directory
+      expect { Rubyx.import('calculator.sub') }.to raise_error(StandardError)
     end
   end
 
