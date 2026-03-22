@@ -1,68 +1,21 @@
 require 'rspec'
-require 'rbconfig'
 require 'fileutils'
 require 'timeout'
 
-lib_ext = case RbConfig::CONFIG['host_os']
-          when /darwin/ then 'dylib'
-          when /linux/ then 'so'
-          when /mingw|mswin/ then 'dll'
-          else 'so'
-          end
-
-bundle_ext = case RbConfig::CONFIG['host_os']
-             when /darwin/ then 'bundle'
-             else lib_ext
-             end
-
-lib_path = File.expand_path("../target/release/librubyx.#{lib_ext}", __dir__)
-bundle_path = File.expand_path("../target/release/rubyx.#{bundle_ext}", __dir__)
-
-if File.exist?(lib_path) && (!File.exist?(bundle_path) || File.mtime(lib_path) > File.mtime(bundle_path))
-  FileUtils.cp(lib_path, bundle_path)
-end
-
-# Add lib/ to the load path so require 'rubyx/uv' works
+# Add lib/ to the load path
 $LOAD_PATH.unshift File.expand_path('../lib', __dir__)
 
-if File.exist?(bundle_path)
-  # Load the native extension first (defines Rubyx module with _import, _eval, etc.)
-  require bundle_path
-  # Then load the Ruby wrappers (import, eval, uv_init, error classes)
-  require 'rubyx/version'
-  require 'rubyx/error'
-  require 'rubyx/uv'
-
-  # Define the Ruby-side wrappers that call the Rust _import/_eval methods
-  module Rubyx
-    def self.import(module_name)
-      name = module_name.to_s
-      unless name.match?(VALID_MODULE_NAME_PATTERN)
-        raise InvalidModuleNameError,
-              "Invalid Python module name: '#{name}'. " \
-              "Module names must contain only alphanumeric characters, underscores, and dots."
-      end
-      _import(name)
-    end
-
-    class << self
-      public define_method(:eval) { |code| _eval(code.to_s) }
-    end
-
-    def self.uv_init(pyproject_toml, **options)
-      Uv.setup(pyproject_toml, **options)
-      Uv.init(pyproject_toml, **options)
-    end
-  end
-else
-  warn 'Extension not built. Run: cargo build --release'
+begin
+  require 'rubyx'
+rescue LoadError => e
+  warn "Extension not loaded: #{e.message}"
   warn 'Skipping Ruby integration tests.'
   RSpec.configure { |c| c.filter_run_excluding ruby_integration: true }
 end
 
-# Initialize Python via Rubyx.init if the extension loaded and Rubyx.init is available
+# Initialize Python if Rubyx loaded successfully
 if defined?(Rubyx) && Rubyx.respond_to?(:init)
-  # Find python3: prefer project .venv, then activated venv, then system
+  # Find python3: prefer project .venv, then system
   project_root = File.expand_path('..', __dir__)
   python3 = [
     File.join(project_root, '.venv', 'bin', 'python3'),
@@ -84,7 +37,6 @@ print(sys.executable)
   if python_info && python_info.length == 3
     python_dl, python_home, python_exe = python_info
 
-    # Detect venv site-packages for sys_paths injection
     sys_paths = `#{python3} -c "import site; print('\\n'.join(site.getsitepackages()))" 2>/dev/null`.strip.split("\n").select { |p| !p.empty? }
 
     Rubyx.init(python_dl, python_home, python_exe, sys_paths)

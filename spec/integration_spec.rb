@@ -110,9 +110,11 @@ RSpec.describe 'Complete Integration', ruby_integration: true do
       expect(utils).to be_a(RubyxObject)
     end
 
-    it 'imports main module from examples/python' do
-      main = Rubyx.import('main')
-      expect(main).to be_a(RubyxObject)
+    it 'can import multiple local modules' do
+      calc = Rubyx.import('calculator')
+      utils = Rubyx.import('data_utils')
+      expect(calc).to be_a(RubyxObject)
+      expect(utils).to be_a(RubyxObject)
     end
 
     it 'uses calculator functions via eval' do
