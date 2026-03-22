@@ -168,6 +168,7 @@ pub struct PythonApi {
         unsafe extern "C" fn(callable: *mut PyObject, args: *mut PyObject) -> *mut PyObject,
     >,
     py_object_get_iter: Symbol<'static, unsafe extern "C" fn(o: *mut PyObject) -> *mut PyObject>,
+    py_object_is_true: Symbol<'static, unsafe extern "C" fn(o: *mut PyObject) -> c_int>,
     py_object_repr: Symbol<'static, unsafe extern "C" fn(o: *mut PyObject) -> *mut PyObject>,
     py_err_print: Symbol<'static, unsafe extern "C" fn(c_int)>,
 
@@ -376,6 +377,8 @@ impl PythonApi {
 
         let py_object_get_iter: Symbol<unsafe extern "C" fn(o: *mut PyObject) -> *mut PyObject> =
             lib.get(b"PyObject_GetIter")?;
+        let py_object_is_true: Symbol<unsafe extern "C" fn(o: *mut PyObject) -> c_int> =
+            lib.get(b"PyObject_IsTrue")?;
         let py_object_repr: Symbol<unsafe extern "C" fn(o: *mut PyObject) -> *mut PyObject> =
             lib.get(b"PyObject_Repr")?;
         let py_err_print: Symbol<unsafe extern "C" fn(c_int)> = lib.get(b"PyErr_PrintEx")?;
@@ -470,6 +473,7 @@ impl PythonApi {
             py_object_call_object: std::mem::transmute(py_object_call_object),
             py_object_call_no_args: std::mem::transmute(py_object_call_no_args),
             py_object_get_iter: std::mem::transmute(py_object_get_iter),
+            py_object_is_true: std::mem::transmute(py_object_is_true),
             py_object_repr: std::mem::transmute(py_object_repr),
             py_err_print: std::mem::transmute(py_err_print),
             py_import_import_module: std::mem::transmute(py_import_module),
@@ -652,6 +656,10 @@ impl PythonApi {
         unsafe { (self.py_object_del_item)(obj, key) }
     }
 
+    pub fn object_is_true(&self, obj: *mut PyObject) -> bool {
+        unsafe { (self.py_object_is_true)(obj) == 1 }
+    }
+
     pub fn object_repr(&self, obj: *mut PyObject) -> String {
         if obj.is_null() {
             return String::from("<null>");
@@ -827,8 +835,17 @@ impl PythonApi {
         if obj.is_null() {
             return None;
         }
-        let name_obj = unsafe { (self.py_type_name)(obj) };
+        // PyType_GetName expects a type object, not an instance.
+        // Get obj.__class__ first, which is the type object.
+        let type_obj = self.object_get_attr_string(obj, "__class__");
+        if type_obj.is_null() {
+            self.clear_error();
+            return None;
+        }
+        let name_obj = unsafe { (self.py_type_name)(type_obj) };
+        self.decref(type_obj);
         if name_obj.is_null() {
+            self.clear_error();
             return None;
         }
         let result = self.string_to_string(name_obj);

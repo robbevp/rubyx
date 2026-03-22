@@ -246,7 +246,7 @@ impl RubyxObject {
     ///   object interaction.
     /// - Keyword arguments (kwargs) are only supported if the last Ruby argument is a hash that can be converted to a Python dict.
     pub fn method_missing(&self, args: &[magnus::Value]) -> Result<magnus::Value, magnus::Error> {
-        let api = crate::api();
+        let api = self.api;
         let gil = api.ensure_gil();
 
         // Get python attribute if exist
@@ -464,7 +464,7 @@ impl RubyxObject {
             ));
         };
 
-        let api = crate::api();
+        let api = self.api;
         let gil = api.ensure_gil();
         let c_name = CString::new(name.as_str())
             .map_err(|_| magnus::Error::new(ruby_helpers::arg_error(), "Invalid method name"))?;
@@ -474,7 +474,7 @@ impl RubyxObject {
     }
 
     pub fn to_s(&self) -> Result<String, magnus::Error> {
-        let api = crate::api();
+        let api = self.api;
         let gil = api.ensure_gil();
         let py_str = api.object_str(self.as_ptr());
         let result = if py_str.is_null() {
@@ -491,7 +491,7 @@ impl RubyxObject {
     }
 
     pub fn inspect(&self) -> Result<String, magnus::Error> {
-        let api = crate::api();
+        let api = self.api;
         let gil = api.ensure_gil();
         let result = api.object_repr(self.as_ptr());
 
@@ -500,7 +500,7 @@ impl RubyxObject {
     }
 
     pub fn to_ruby(&self) -> Result<magnus::Value, magnus::Error> {
-        let api = crate::api();
+        let api = self.api;
         let gil = api.ensure_gil();
 
         let sendable = python_to_sendable(self.as_ptr(), api)
@@ -512,7 +512,7 @@ impl RubyxObject {
     }
 
     pub fn getitem(&self, key: Value) -> Result<Value, magnus::Error> {
-        let api = crate::api();
+        let api = self.api;
         let gil = api.ensure_gil();
         let ruby = Ruby::get()
             .map_err(|e| magnus::Error::new(ruby_helpers::runtime_error(), e.to_string()))?;
@@ -539,7 +539,7 @@ impl RubyxObject {
     }
 
     pub fn setitem(&self, key: Value, value: Value) -> Result<Value, magnus::Error> {
-        let api = crate::api();
+        let api = self.api;
         let gil = api.ensure_gil();
 
         let py_key = ruby_to_python(key, api)?;
@@ -563,7 +563,7 @@ impl RubyxObject {
     }
 
     pub fn delitem(&self, key: Value) -> Result<Value, magnus::Error> {
-        let api = crate::api();
+        let api = self.api;
         let gil = api.ensure_gil();
         let ruby = Ruby::get()
             .map_err(|e| magnus::Error::new(ruby_helpers::runtime_error(), e.to_string()))?;
@@ -595,7 +595,7 @@ impl RubyxObject {
             return Ok(receiver.enumeratorize("each", ()).as_value());
         }
 
-        let api = crate::api();
+        let api = self.api;
         let gil = api.ensure_gil();
 
         let py_iter = api.object_get_iter(self.as_ptr());
@@ -642,6 +642,31 @@ impl RubyxObject {
 
         result?;
         Ok(ruby.qnil().as_value())
+    }
+
+    pub fn is_truthy(&self) -> bool {
+        let gil = self.api.ensure_gil();
+        let result = self.api.object_is_true(self.py_obj);
+        self.api.release_gil(gil);
+        result
+    }
+
+    pub fn is_falsy(&self) -> bool {
+        !self.is_truthy()
+    }
+
+    pub fn is_callable(&self) -> bool {
+        let gil = self.api.ensure_gil();
+        let result = self.api.callable_check(self.py_obj) != 0;
+        self.api.release_gil(gil);
+        result
+    }
+
+    pub fn py_type(&self) -> Result<String, magnus::Error> {
+        let gil = self.api.ensure_gil();
+        let result = self.api.type_name(self.py_obj);
+        self.api.release_gil(gil);
+        Ok(result.unwrap_or_default())
     }
 }
 
@@ -1394,5 +1419,234 @@ mod tests {
             drop(wrapper);
             api.decref(py_dict);
         });
+    }
+
+    // ========== is_truthy / is_falsy tests ==========
+
+    #[test]
+    #[serial]
+    fn test_truthy_nonzero_int() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        let w = RubyxObject::new(api.long_from_i64(42), api).unwrap();
+        assert!(w.is_truthy());
+        assert!(!w.is_falsy());
+    }
+
+    #[test]
+    #[serial]
+    fn test_truthy_zero_int() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        let w = RubyxObject::new(api.long_from_i64(0), api).unwrap();
+        assert!(!w.is_truthy());
+        assert!(w.is_falsy());
+    }
+
+    #[test]
+    #[serial]
+    fn test_truthy_none() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        api.incref(api.py_none);
+        let w = RubyxObject::new(api.py_none, api).unwrap();
+        assert!(!w.is_truthy());
+        assert!(w.is_falsy());
+    }
+
+    #[test]
+    #[serial]
+    fn test_truthy_bool() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        let t = RubyxObject::new(api.bool_from_i64(1), api).unwrap();
+        assert!(t.is_truthy());
+        let f = RubyxObject::new(api.bool_from_i64(0), api).unwrap();
+        assert!(f.is_falsy());
+    }
+
+    #[test]
+    #[serial]
+    fn test_truthy_empty_string() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        let w = RubyxObject::new(api.string_from_str(""), api).unwrap();
+        assert!(w.is_falsy());
+    }
+
+    #[test]
+    #[serial]
+    fn test_truthy_nonempty_string() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        let w = RubyxObject::new(api.string_from_str("hello"), api).unwrap();
+        assert!(w.is_truthy());
+    }
+
+    #[test]
+    #[serial]
+    fn test_truthy_empty_list() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        let list = unsafe { (api.py_list_new)(0) };
+        let w = RubyxObject::new(list, api).unwrap();
+        assert!(w.is_falsy());
+    }
+
+    #[test]
+    #[serial]
+    fn test_truthy_nonempty_list() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        let list = unsafe { (api.py_list_new)(1) };
+        unsafe { (api.py_list_set_item)(list, 0, api.long_from_i64(1)) };
+        let w = RubyxObject::new(list, api).unwrap();
+        assert!(w.is_truthy());
+    }
+
+    // ========== is_callable tests ==========
+
+    #[test]
+    #[serial]
+    fn test_callable_function() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        let json = api.import_module("json").expect("json should import");
+        let loads = api.object_get_attr_string(json, "loads");
+        let w = RubyxObject::new(loads, api).unwrap();
+        assert!(w.is_callable());
+        drop(w);
+        api.decref(loads);
+        api.decref(json);
+    }
+
+    #[test]
+    #[serial]
+    fn test_not_callable_int() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        let w = RubyxObject::new(api.long_from_i64(42), api).unwrap();
+        assert!(!w.is_callable());
+    }
+
+    #[test]
+    #[serial]
+    fn test_not_callable_string() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        let w = RubyxObject::new(api.string_from_str("hi"), api).unwrap();
+        assert!(!w.is_callable());
+    }
+
+    #[test]
+    #[serial]
+    fn test_not_callable_module() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        let os = api.import_module("os").expect("os should import");
+        let w = RubyxObject::new(os, api).unwrap();
+        assert!(!w.is_callable());
+        drop(w);
+        api.decref(os);
+    }
+
+    // ========== py_type tests ==========
+
+    #[test]
+    #[serial]
+    fn test_py_type_int() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        let w = RubyxObject::new(api.long_from_i64(1), api).unwrap();
+        assert_eq!(w.py_type().unwrap(), "int");
+    }
+
+    #[test]
+    #[serial]
+    fn test_py_type_str() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        let w = RubyxObject::new(api.string_from_str("x"), api).unwrap();
+        assert_eq!(w.py_type().unwrap(), "str");
+    }
+
+    #[test]
+    #[serial]
+    fn test_py_type_float() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        let w = RubyxObject::new(api.float_from_f64(1.0), api).unwrap();
+        assert_eq!(w.py_type().unwrap(), "float");
+    }
+
+    #[test]
+    #[serial]
+    fn test_py_type_bool() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        let w = RubyxObject::new(api.bool_from_i64(1), api).unwrap();
+        assert_eq!(w.py_type().unwrap(), "bool");
+    }
+
+    #[test]
+    #[serial]
+    fn test_py_type_list() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        let list = unsafe { (api.py_list_new)(0) };
+        let w = RubyxObject::new(list, api).unwrap();
+        assert_eq!(w.py_type().unwrap(), "list");
+    }
+
+    #[test]
+    #[serial]
+    fn test_py_type_dict() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        let dict = api.dict_new();
+        let w = RubyxObject::new(dict, api).unwrap();
+        assert_eq!(w.py_type().unwrap(), "dict");
+    }
+
+    #[test]
+    #[serial]
+    fn test_py_type_none() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        api.incref(api.py_none);
+        let w = RubyxObject::new(api.py_none, api).unwrap();
+        assert_eq!(w.py_type().unwrap(), "NoneType");
+    }
+
+    #[test]
+    #[serial]
+    fn test_py_type_module() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else { return; };
+        let api = guard.api();
+        let os = api.import_module("os").expect("os should import");
+        let w = RubyxObject::new(os, api).unwrap();
+        assert_eq!(w.py_type().unwrap(), "module");
+        drop(w);
+        api.decref(os);
     }
 }

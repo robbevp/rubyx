@@ -455,6 +455,124 @@ RSpec.describe 'RubyxObject', ruby_integration: true do
     end
   end
 
+  # ========== truthy? / falsy? ==========
+
+  describe '#truthy?' do
+    it 'returns true for nonzero integer' do
+      expect(Rubyx.eval('42').truthy?).to be true
+    end
+
+    it 'returns false for zero' do
+      expect(Rubyx.eval('0').truthy?).to be false
+    end
+
+    it 'returns false for None' do
+      expect(Rubyx.eval('None').truthy?).to be false
+    end
+
+    it 'returns true for True' do
+      expect(Rubyx.eval('True').truthy?).to be true
+    end
+
+    it 'returns false for False' do
+      expect(Rubyx.eval('False').truthy?).to be false
+    end
+
+    it 'returns false for empty string' do
+      expect(Rubyx.eval('""').truthy?).to be false
+    end
+
+    it 'returns true for nonempty string' do
+      expect(Rubyx.eval('"hello"').truthy?).to be true
+    end
+
+    it 'returns false for empty list' do
+      expect(Rubyx.eval('[]').truthy?).to be false
+    end
+
+    it 'returns true for nonempty list' do
+      expect(Rubyx.eval('[1]').truthy?).to be true
+    end
+
+    it 'returns false for empty dict' do
+      expect(Rubyx.eval('{}').truthy?).to be false
+    end
+
+    it 'returns true for nonempty dict' do
+      expect(Rubyx.eval("{'a': 1}").truthy?).to be true
+    end
+  end
+
+  describe '#falsy?' do
+    it 'is the opposite of truthy?' do
+      expect(Rubyx.eval('0').falsy?).to be true
+      expect(Rubyx.eval('42').falsy?).to be false
+      expect(Rubyx.eval('None').falsy?).to be true
+      expect(Rubyx.eval('"hello"').falsy?).to be false
+    end
+  end
+
+  # ========== callable? ==========
+
+  describe '#callable?' do
+    it 'returns true for functions' do
+      func = Rubyx.eval("lambda x: x * 2")
+      expect(func.callable?).to be true
+    end
+
+    it 'returns false for integers' do
+      expect(Rubyx.eval('42').callable?).to be false
+    end
+
+    it 'returns false for strings' do
+      expect(Rubyx.eval('"hello"').callable?).to be false
+    end
+
+    it 'returns false for lists' do
+      expect(Rubyx.eval('[1, 2]').callable?).to be false
+    end
+
+    it 'returns false for None' do
+      expect(Rubyx.eval('None').callable?).to be false
+    end
+  end
+
+  # ========== py_type ==========
+
+  describe '#py_type' do
+    it 'returns "int" for integers' do
+      expect(Rubyx.eval('42').py_type).to eq('int')
+    end
+
+    it 'returns "str" for strings' do
+      expect(Rubyx.eval('"hello"').py_type).to eq('str')
+    end
+
+    it 'returns "float" for floats' do
+      expect(Rubyx.eval('3.14').py_type).to eq('float')
+    end
+
+    it 'returns "bool" for booleans' do
+      expect(Rubyx.eval('True').py_type).to eq('bool')
+    end
+
+    it 'returns "list" for lists' do
+      expect(Rubyx.eval('[1, 2]').py_type).to eq('list')
+    end
+
+    it 'returns "dict" for dicts' do
+      expect(Rubyx.eval('{}').py_type).to eq('dict')
+    end
+
+    it 'returns "NoneType" for None' do
+      expect(Rubyx.eval('None').py_type).to eq('NoneType')
+    end
+
+    it 'returns "module" for modules' do
+      expect(Rubyx.import('os').py_type).to eq('module')
+    end
+  end
+
   # ========== class identity ==========
 
   describe 'class identity' do
