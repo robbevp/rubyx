@@ -54,7 +54,20 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
     rubyx_module.define_singleton_method("_eval", function!(crate::eval::rubyx_eval, 1))?;
 
     // RubyxObject class for wrapped Python objects
-    let _py_object = ruby.define_class("RubyxObject", ruby.class_object())?;
+    let py_object = ruby.define_class("RubyxObject", ruby.class_object())?;
+    py_object.define_method(
+        "method_missing",
+        method!(crate::rubyx_object::RubyxObject::method_missing, -1),
+    )?;
+    py_object.define_method("to_s", method!(crate::rubyx_object::RubyxObject::to_s, 0))?;
+    py_object.define_method(
+        "inspect",
+        method!(crate::rubyx_object::RubyxObject::inspect, 0),
+    )?;
+    py_object.define_method(
+        "to_ruby",
+        method!(crate::rubyx_object::RubyxObject::to_ruby, 0),
+    )?;
 
     // RubyxStream class with Enumerable
     let stream_class = rubyx_module.define_class("Stream", ruby.class_object())?;
@@ -2372,7 +2385,6 @@ mod tests {
         });
     }
 
-
     #[test]
     #[serial]
     fn test_inject_sys_paths_adds_paths() {
@@ -2514,5 +2526,377 @@ mod tests {
             crate::API.get().is_some(),
             "API should be initialized by test harness"
         );
+    }
+
+    // ========== to_s tests ==========
+
+    #[test]
+    #[serial]
+    fn test_to_s_integer() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let py_int = api.long_from_i64(42);
+        let wrapper = RubyxObject::new(py_int, api).unwrap();
+        let result = wrapper.to_s().expect("to_s should succeed");
+        assert_eq!(result, "42");
+
+        drop(wrapper);
+        api.decref(py_int);
+    }
+
+    #[test]
+    #[serial]
+    fn test_to_s_string() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let py_str = api.string_from_str("hello world");
+        let wrapper = RubyxObject::new(py_str, api).unwrap();
+        let result = wrapper.to_s().expect("to_s should succeed");
+        assert_eq!(result, "hello world");
+
+        drop(wrapper);
+        api.decref(py_str);
+    }
+
+    #[test]
+    #[serial]
+    fn test_to_s_float() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let py_float = api.float_from_f64(3.14);
+        let wrapper = RubyxObject::new(py_float, api).unwrap();
+        let result = wrapper.to_s().expect("to_s should succeed");
+        assert!(result.starts_with("3.14"), "to_s of 3.14 should start with '3.14', got: {result}");
+
+        drop(wrapper);
+        api.decref(py_float);
+    }
+
+    #[test]
+    #[serial]
+    fn test_to_s_bool() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let py_true = api.bool_from_i64(1);
+        let wrapper = RubyxObject::new(py_true, api).unwrap();
+        let result = wrapper.to_s().expect("to_s should succeed");
+        assert_eq!(result, "True");
+
+        drop(wrapper);
+        api.decref(py_true);
+    }
+
+    #[test]
+    #[serial]
+    fn test_to_s_none() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let py_none = api.py_none;
+        api.incref(py_none);
+        let wrapper = RubyxObject::new(py_none, api).unwrap();
+        let result = wrapper.to_s().expect("to_s should succeed");
+        assert_eq!(result, "None");
+
+        drop(wrapper);
+    }
+
+    #[test]
+    #[serial]
+    fn test_to_s_list() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let list = unsafe { (api.py_list_new)(3) };
+        unsafe {
+            (api.py_list_set_item)(list, 0, api.long_from_i64(1));
+            (api.py_list_set_item)(list, 1, api.long_from_i64(2));
+            (api.py_list_set_item)(list, 2, api.long_from_i64(3));
+        }
+        let wrapper = RubyxObject::new(list, api).unwrap();
+        let result = wrapper.to_s().expect("to_s should succeed");
+        assert_eq!(result, "[1, 2, 3]");
+
+        drop(wrapper);
+        api.decref(list);
+    }
+
+    // ========== inspect tests ==========
+
+    #[test]
+    #[serial]
+    fn test_inspect_integer() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let py_int = api.long_from_i64(42);
+        let wrapper = RubyxObject::new(py_int, api).unwrap();
+        let result = wrapper.inspect().expect("inspect should succeed");
+        assert_eq!(result, "42");
+
+        drop(wrapper);
+        api.decref(py_int);
+    }
+
+    #[test]
+    #[serial]
+    fn test_inspect_string() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let py_str = api.string_from_str("hello");
+        let wrapper = RubyxObject::new(py_str, api).unwrap();
+        let result = wrapper.inspect().expect("inspect should succeed");
+        // Python repr of a string includes quotes
+        assert_eq!(result, "'hello'");
+
+        drop(wrapper);
+        api.decref(py_str);
+    }
+
+    #[test]
+    #[serial]
+    fn test_inspect_none() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let py_none = api.py_none;
+        api.incref(py_none);
+        let wrapper = RubyxObject::new(py_none, api).unwrap();
+        let result = wrapper.inspect().expect("inspect should succeed");
+        assert_eq!(result, "None");
+
+        drop(wrapper);
+    }
+
+    #[test]
+    #[serial]
+    fn test_inspect_dict() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let dict = api.dict_new();
+        let key = api.string_from_str("x");
+        let val = api.long_from_i64(1);
+        api.dict_set_item(dict, key, val);
+        api.decref(key);
+        api.decref(val);
+
+        let wrapper = RubyxObject::new(dict, api).unwrap();
+        let result = wrapper.inspect().expect("inspect should succeed");
+        assert_eq!(result, "{'x': 1}");
+
+        drop(wrapper);
+        api.decref(dict);
+    }
+
+    // ========== to_ruby tests ==========
+
+    #[test]
+    #[serial]
+    fn test_to_ruby_integer() {
+        with_ruby_python(|ruby, api| {
+            let py_int = api.long_from_i64(42);
+            let wrapper = RubyxObject::new(py_int, api).unwrap();
+            let result = wrapper.to_ruby().expect("to_ruby should succeed");
+            let val = i64::try_convert(result).expect("should convert to i64");
+            assert_eq!(val, 42);
+
+            drop(wrapper);
+            api.decref(py_int);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_to_ruby_string() {
+        with_ruby_python(|ruby, api| {
+            let py_str = api.string_from_str("hello");
+            let wrapper = RubyxObject::new(py_str, api).unwrap();
+            let result = wrapper.to_ruby().expect("to_ruby should succeed");
+            let val = String::try_convert(result).expect("should convert to String");
+            assert_eq!(val, "hello");
+
+            drop(wrapper);
+            api.decref(py_str);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_to_ruby_float() {
+        with_ruby_python(|ruby, api| {
+            let py_float = api.float_from_f64(3.14);
+            let wrapper = RubyxObject::new(py_float, api).unwrap();
+            let result = wrapper.to_ruby().expect("to_ruby should succeed");
+            let val = f64::try_convert(result).expect("should convert to f64");
+            assert!((val - 3.14).abs() < 0.001);
+
+            drop(wrapper);
+            api.decref(py_float);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_to_ruby_bool_true() {
+        with_ruby_python(|ruby, api| {
+            let py_true = api.bool_from_i64(1);
+            let wrapper = RubyxObject::new(py_true, api).unwrap();
+            let result = wrapper.to_ruby().expect("to_ruby should succeed");
+            let val = bool::try_convert(result).expect("should convert to bool");
+            assert!(val);
+
+            drop(wrapper);
+            api.decref(py_true);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_to_ruby_bool_false() {
+        with_ruby_python(|ruby, api| {
+            let py_false = api.bool_from_i64(0);
+            let wrapper = RubyxObject::new(py_false, api).unwrap();
+            let result = wrapper.to_ruby().expect("to_ruby should succeed");
+            let val = bool::try_convert(result).expect("should convert to bool");
+            assert!(!val);
+
+            drop(wrapper);
+            api.decref(py_false);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_to_ruby_none_returns_nil() {
+        with_ruby_python(|ruby, api| {
+            let py_none = api.py_none;
+            api.incref(py_none);
+            let wrapper = RubyxObject::new(py_none, api).unwrap();
+            let result = wrapper.to_ruby().expect("to_ruby should succeed");
+            assert!(
+                magnus::value::ReprValue::is_nil(result),
+                "Python None should convert to Ruby nil"
+            );
+
+            drop(wrapper);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_to_ruby_list() {
+        with_ruby_python(|ruby, api| {
+            let list = unsafe { (api.py_list_new)(3) };
+            unsafe {
+                (api.py_list_set_item)(list, 0, api.long_from_i64(10));
+                (api.py_list_set_item)(list, 1, api.long_from_i64(20));
+                (api.py_list_set_item)(list, 2, api.long_from_i64(30));
+            }
+            let wrapper = RubyxObject::new(list, api).unwrap();
+            let result = wrapper.to_ruby().expect("to_ruby should succeed");
+
+            // Result should be a Ruby array
+            let arr = magnus::RArray::try_convert(result).expect("should be an Array");
+            assert_eq!(arr.len(), 3);
+            assert_eq!(i64::try_convert(arr.entry::<magnus::Value>(0).unwrap()).unwrap(), 10);
+            assert_eq!(i64::try_convert(arr.entry::<magnus::Value>(1).unwrap()).unwrap(), 20);
+            assert_eq!(i64::try_convert(arr.entry::<magnus::Value>(2).unwrap()).unwrap(), 30);
+
+            drop(wrapper);
+            api.decref(list);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_to_ruby_dict() {
+        with_ruby_python(|ruby, api| {
+            let dict = api.dict_new();
+            let key = api.string_from_str("name");
+            let val = api.string_from_str("rubyx");
+            api.dict_set_item(dict, key, val);
+            api.decref(key);
+            api.decref(val);
+
+            let wrapper = RubyxObject::new(dict, api).unwrap();
+            let result = wrapper.to_ruby().expect("to_ruby should succeed");
+
+            // Result should be a Ruby hash
+            let hash = magnus::RHash::try_convert(result).expect("should be a Hash");
+            let name: String = hash
+                .aref::<_, magnus::Value>("name")
+                .and_then(|v| String::try_convert(v))
+                .expect("should have 'name' key");
+            assert_eq!(name, "rubyx");
+
+            drop(wrapper);
+            api.decref(dict);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_to_ruby_unconvertible_returns_error() {
+        with_ruby_python(|ruby, api| {
+            // Python module objects can't be converted to Ruby primitives
+            let module = api.import_module("sys").expect("sys should import");
+            let wrapper = RubyxObject::new(module, api).unwrap();
+            let result = wrapper.to_ruby();
+            assert!(result.is_err(), "module should not be convertible to Ruby");
+
+            drop(wrapper);
+            api.decref(module);
+        });
+    }
+
+    // ========== to_s / inspect difference ==========
+
+    #[test]
+    #[serial]
+    fn test_to_s_vs_inspect_string() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let py_str = api.string_from_str("hello");
+        let wrapper = RubyxObject::new(py_str, api).unwrap();
+
+        // to_s returns the string value (Python str())
+        let to_s_result = wrapper.to_s().expect("to_s should succeed");
+        assert_eq!(to_s_result, "hello");
+
+        // inspect returns the repr (Python repr(), with quotes)
+        let inspect_result = wrapper.inspect().expect("inspect should succeed");
+        assert_eq!(inspect_result, "'hello'");
+
+        drop(wrapper);
+        api.decref(py_str);
     }
 }

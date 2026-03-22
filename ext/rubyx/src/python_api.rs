@@ -158,6 +158,7 @@ pub struct PythonApi {
         unsafe extern "C" fn(callable: *mut PyObject, args: *mut PyObject) -> *mut PyObject,
     >,
     py_object_get_iter: Symbol<'static, unsafe extern "C" fn(o: *mut PyObject) -> *mut PyObject>,
+    py_object_repr: Symbol<'static, unsafe extern "C" fn(o: *mut PyObject) -> *mut PyObject>,
     py_err_print: Symbol<'static, unsafe extern "C" fn(c_int)>,
 
     // Import Module
@@ -352,7 +353,8 @@ impl PythonApi {
 
         let py_object_get_iter: Symbol<unsafe extern "C" fn(o: *mut PyObject) -> *mut PyObject> =
             lib.get(b"PyObject_GetIter")?;
-
+        let py_object_repr: Symbol<unsafe extern "C" fn(o: *mut PyObject) -> *mut PyObject> =
+            lib.get(b"PyObject_Repr")?;
         let py_err_print: Symbol<unsafe extern "C" fn(c_int)> = lib.get(b"PyErr_PrintEx")?;
 
         // Import Module
@@ -442,6 +444,7 @@ impl PythonApi {
             py_object_call_object: std::mem::transmute(py_object_call_object),
             py_object_call_no_args: std::mem::transmute(py_object_call_no_args),
             py_object_get_iter: std::mem::transmute(py_object_get_iter),
+            py_object_repr: std::mem::transmute(py_object_repr),
             py_err_print: std::mem::transmute(py_err_print),
             py_import_import_module: std::mem::transmute(py_import_module),
             py_set_python_home: std::mem::transmute(py_set_python_home),
@@ -597,6 +600,28 @@ impl PythonApi {
         }
         let slice = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), size as usize) };
         String::from_utf8(slice.to_vec()).ok()
+    }
+
+    pub fn object_str(&self, obj: *mut PyObject) -> *mut PyObject {
+        if obj.is_null() {
+            return std::ptr::null_mut();
+        }
+        unsafe { (self.py_object_str)(obj) }
+    }
+
+    pub fn object_repr(&self, obj: *mut PyObject) -> String {
+        if obj.is_null() {
+            return String::from("<null>");
+        }
+        let repr_ptr = unsafe { (self.py_object_repr)(obj) };
+        if repr_ptr.is_null() {
+            return String::from("<repr error>");
+        }
+        let repr = self
+            .string_to_string(repr_ptr)
+            .unwrap_or("<invalid repr>".to_string());
+        self.decref(repr_ptr);
+        repr
     }
 
     pub fn is_string(&self, obj: *mut PyObject) -> bool {
@@ -5499,5 +5524,177 @@ _loop = asyncio.new_event_loop()
         // Try importing a module that definitely doesn't exist in default sys.path
         let result = api.import_module("rubyx_nonexistent_module_xyz_123");
         assert!(result.is_err(), "should fail to import nonexistent module");
+    }
+
+    // ========== object_str tests ==========
+
+    #[test]
+    #[serial]
+    fn test_object_str_integer() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let py_int = api.long_from_i64(42);
+        let py_str = api.object_str(py_int);
+        assert!(!py_str.is_null());
+        assert_eq!(api.string_to_string(py_str), Some("42".to_string()));
+        api.decref(py_str);
+        api.decref(py_int);
+    }
+
+    #[test]
+    #[serial]
+    fn test_object_str_string() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let py_str = api.string_from_str("hello");
+        let result = api.object_str(py_str);
+        assert!(!result.is_null());
+        assert_eq!(api.string_to_string(result), Some("hello".to_string()));
+        api.decref(result);
+        api.decref(py_str);
+    }
+
+    #[test]
+    #[serial]
+    fn test_object_str_none() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        api.incref(api.py_none);
+        let result = api.object_str(api.py_none);
+        assert!(!result.is_null());
+        assert_eq!(api.string_to_string(result), Some("None".to_string()));
+        api.decref(result);
+        api.decref(api.py_none);
+    }
+
+    #[test]
+    #[serial]
+    fn test_object_str_null_returns_null() {
+        let Some(_guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = _guard.api();
+
+        let result = api.object_str(std::ptr::null_mut());
+        assert!(result.is_null());
+    }
+
+    #[test]
+    #[serial]
+    fn test_object_str_list() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let list = unsafe { (api.py_list_new)(2) };
+        unsafe {
+            (api.py_list_set_item)(list, 0, api.long_from_i64(1));
+            (api.py_list_set_item)(list, 1, api.long_from_i64(2));
+        }
+        let result = api.object_str(list);
+        assert!(!result.is_null());
+        assert_eq!(api.string_to_string(result), Some("[1, 2]".to_string()));
+        api.decref(result);
+        api.decref(list);
+    }
+
+    // ========== object_repr tests ==========
+
+    #[test]
+    #[serial]
+    fn test_object_repr_integer() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let py_int = api.long_from_i64(42);
+        let result = api.object_repr(py_int);
+        assert_eq!(result, "42");
+        api.decref(py_int);
+    }
+
+    #[test]
+    #[serial]
+    fn test_object_repr_string_includes_quotes() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let py_str = api.string_from_str("hello");
+        let result = api.object_repr(py_str);
+        assert_eq!(result, "'hello'");
+        api.decref(py_str);
+    }
+
+    #[test]
+    #[serial]
+    fn test_object_repr_none() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        api.incref(api.py_none);
+        let result = api.object_repr(api.py_none);
+        assert_eq!(result, "None");
+        api.decref(api.py_none);
+    }
+
+    #[test]
+    #[serial]
+    fn test_object_repr_null() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let result = api.object_repr(std::ptr::null_mut());
+        assert_eq!(result, "<null>");
+    }
+
+    #[test]
+    #[serial]
+    fn test_object_repr_bool_true() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let py_true = api.bool_from_i64(1);
+        let result = api.object_repr(py_true);
+        assert_eq!(result, "True");
+        api.decref(py_true);
+    }
+
+    #[test]
+    #[serial]
+    fn test_object_repr_dict() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let dict = api.dict_new();
+        let key = api.string_from_str("a");
+        let val = api.long_from_i64(1);
+        api.dict_set_item(dict, key, val);
+        api.decref(key);
+        api.decref(val);
+
+        let result = api.object_repr(dict);
+        assert_eq!(result, "{'a': 1}");
+        api.decref(dict);
     }
 }
