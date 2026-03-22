@@ -1,7 +1,3 @@
-// Tutorial 06: Type Conversion - Primitives
-//
-// Your task: Implement ToPython and FromPython traits for primitive types.
-// The tests define the expected behavior.
 
 use crate::python_api::PythonApi;
 use crate::python_ffi::PyObject;
@@ -178,7 +174,6 @@ impl<T: ToPython> ToPython for Option<T> {
     }
 }
 
-// TODO: Copy ToPython and FromPython traits from Tutorial 06
 // TODO: Implement ToPython for Vec<T>
 impl<T: ToPython> ToPython for Vec<T> {
     fn to_python(&self, api: &PythonApi) -> Result<*mut PyObject, ConvertError> {

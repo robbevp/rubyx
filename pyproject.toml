@@ -8,3 +8,8 @@ dependencies = [
     "torch>=2.0",
     "transformers>=4.40",
 ]
+
+[tool.uv.workspace]
+members = [
+    "examples/python",
+]

@@ -50,8 +50,8 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
     rubyx_module.define_singleton_method("init", function!(rubyx_init, 4))?;
 
     // Module Class Methods
-    rubyx_module.define_singleton_method("import", function!(crate::import::rubyx_import, 1))?;
-    rubyx_module.define_singleton_method("eval", function!(crate::eval::rubyx_eval, 1))?;
+    rubyx_module.define_singleton_method("_import", function!(crate::import::rubyx_import, 1))?;
+    rubyx_module.define_singleton_method("_eval", function!(crate::eval::rubyx_eval, 1))?;
 
     // RubyxObject class for wrapped Python objects
     let _py_object = ruby.define_class("RubyxObject", ruby.class_object())?;
@@ -70,7 +70,7 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
     // Rubyx.async_stream(iterable) - creates a RubyxStream from rust event loop
     rubyx_module.define_singleton_method("async_stream", function!(create_async_stream, -1))?;
 
-    // NonBlockingStream class with Enumerable (Tutorial 11c)
+    // NonBlockingStream class with Enumerable
     let nb_stream_class = rubyx_module.define_class("NonBlockingStream", ruby.class_object())?;
     nb_stream_class.define_method(
         "each",
@@ -2372,7 +2372,6 @@ mod tests {
         });
     }
 
-    // ========== Tutorial 13: inject_sys_paths tests ==========
 
     #[test]
     #[serial]

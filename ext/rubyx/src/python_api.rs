@@ -5110,7 +5110,7 @@ _loop = asyncio.new_event_loop()
         api.decref(globals);
     }
 
-    // ========== Tutorial 13: str_to_wchar tests ==========
+    // ========== str_to_wchar tests ==========
 
     #[test]
     #[serial]
@@ -5173,7 +5173,7 @@ _loop = asyncio.new_event_loop()
         assert_eq!(wide.len(), 32); // 31 chars + null
     }
 
-    // ========== Tutorial 13: list_append tests ==========
+    // ========== list_append tests ==========
 
     #[test]
     #[serial]
@@ -5300,7 +5300,7 @@ _loop = asyncio.new_event_loop()
         api.decref(list);
     }
 
-    // ========== Tutorial 13: initialize_ex tests ==========
+    // ========== initialize_ex tests ==========
 
     #[test]
     #[serial]
@@ -5319,7 +5319,7 @@ _loop = asyncio.new_event_loop()
         );
     }
 
-    // ========== Tutorial 13: sys.path injection via Python ==========
+    // ========== sys.path injection via Python ==========
 
     #[test]
     #[serial]

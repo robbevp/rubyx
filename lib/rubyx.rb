@@ -11,6 +11,29 @@ end
 require_relative 'rubyx/uv'
 
 module Rubyx
+  # Import a Python module by name.
+  #
+  # @param module_name [String] Python module name (e.g., "os", "numpy", "my_module.sub")
+  # @return [RubyxObject] Wrapped Python module
+  # @raise [InvalidModuleNameError] if the name contains invalid characters
+  def self.import(module_name)
+    name = module_name.to_s
+    unless name.match?(VALID_MODULE_NAME_PATTERN)
+      raise InvalidModuleNameError,
+            "Invalid Python module name: '#{name}'. " \
+            "Module names must contain only alphanumeric characters, underscores, and dots."
+    end
+    _import(name)
+  end
+
+  # Evaluate Python code and return the result.
+  #
+  # @param code [String] Python code to evaluate
+  # @return [Object] The result converted to a Ruby value
+  class << self
+    public define_method(:eval) { |code| _eval(code.to_s) }
+  end
+
   # Convenience method: setup Python environment via uv and initialize.
   #
   # @param pyproject_toml [String] Content of pyproject.toml

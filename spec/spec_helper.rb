@@ -26,18 +26,32 @@ end
 $LOAD_PATH.unshift File.expand_path('../lib', __dir__)
 
 if File.exist?(bundle_path)
+  # Load the native extension first (defines Rubyx module with _import, _eval, etc.)
   require bundle_path
+  # Then load the Ruby wrappers (import, eval, uv_init, error classes)
   require 'rubyx/version'
   require 'rubyx/error'
   require 'rubyx/uv'
 
-  # Define convenience method if not already present
-  unless Rubyx.respond_to?(:uv_init)
-    module Rubyx
-      def self.uv_init(pyproject_toml, **options)
-        Uv.setup(pyproject_toml, **options)
-        Uv.init(pyproject_toml, **options)
+  # Define the Ruby-side wrappers that call the Rust _import/_eval methods
+  module Rubyx
+    def self.import(module_name)
+      name = module_name.to_s
+      unless name.match?(VALID_MODULE_NAME_PATTERN)
+        raise InvalidModuleNameError,
+              "Invalid Python module name: '#{name}'. " \
+              "Module names must contain only alphanumeric characters, underscores, and dots."
       end
+      _import(name)
+    end
+
+    class << self
+      public define_method(:eval) { |code| _eval(code.to_s) }
+    end
+
+    def self.uv_init(pyproject_toml, **options)
+      Uv.setup(pyproject_toml, **options)
+      Uv.init(pyproject_toml, **options)
     end
   end
 else
