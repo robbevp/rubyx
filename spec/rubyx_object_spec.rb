@@ -276,6 +276,89 @@ RSpec.describe 'RubyxObject', ruby_integration: true do
     end
   end
 
+  # ========== [] / []= / delete ==========
+
+  describe '[] (getitem)' do
+    it 'reads dict values by string key' do
+      d = Rubyx.eval("{'name': 'Alice', 'age': 30}")
+      expect(d["name"].to_ruby).to eq("Alice")
+      expect(d["age"].to_ruby).to eq(30)
+    end
+
+    it 'reads list values by integer index' do
+      l = Rubyx.eval("[10, 20, 30]")
+      expect(l[0].to_ruby).to eq(10)
+      expect(l[1].to_ruby).to eq(20)
+      expect(l[2].to_ruby).to eq(30)
+    end
+
+    it 'supports negative indexing on lists' do
+      l = Rubyx.eval("[10, 20, 30]")
+      expect(l[-1].to_ruby).to eq(30)
+      expect(l[-2].to_ruby).to eq(20)
+    end
+
+    it 'raises for missing dict key' do
+      d = Rubyx.eval("{}")
+      expect { d["nope"] }.to raise_error(StandardError)
+    end
+
+    it 'raises for out-of-range list index' do
+      l = Rubyx.eval("[1, 2]")
+      expect { l[99] }.to raise_error(StandardError)
+    end
+
+    it 'returns RubyxObject' do
+      d = Rubyx.eval("{'x': 42}")
+      expect(d["x"]).to be_a(RubyxObject)
+    end
+  end
+
+  describe '[]= (setitem)' do
+    it 'sets dict values' do
+      d = Rubyx.eval("{}")
+      d["name"] = "Bob"
+      expect(d["name"].to_ruby).to eq("Bob")
+    end
+
+    it 'overwrites existing dict values' do
+      d = Rubyx.eval("{'x': 1}")
+      d["x"] = 42
+      expect(d["x"].to_ruby).to eq(42)
+    end
+
+    it 'sets list values by index' do
+      l = Rubyx.eval("[1, 2, 3]")
+      l[1] = 99
+      expect(l[1].to_ruby).to eq(99)
+    end
+
+    it 'returns the assigned value' do
+      d = Rubyx.eval("{}")
+      result = (d["key"] = "value")
+      expect(result).to eq("value")
+    end
+  end
+
+  describe '#delete (delitem)' do
+    it 'removes dict keys' do
+      d = Rubyx.eval("{'a': 1, 'b': 2}")
+      d.delete("a")
+      expect { d["a"] }.to raise_error(StandardError)
+    end
+
+    it 'leaves other keys intact after delete' do
+      d = Rubyx.eval("{'a': 1, 'b': 2}")
+      d.delete("a")
+      expect(d["b"].to_ruby).to eq(2)
+    end
+
+    it 'raises for missing key' do
+      d = Rubyx.eval("{}")
+      expect { d.delete("nope") }.to raise_error(StandardError)
+    end
+  end
+
   # ========== class identity ==========
 
   describe 'class identity' do

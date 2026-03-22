@@ -71,6 +71,9 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
         "to_ruby",
         method!(crate::rubyx_object::RubyxObject::to_ruby, 0),
     )?;
+    py_object.define_method("[]", method!(RubyxObject::getitem, 1))?;
+    py_object.define_method("[]=", method!(RubyxObject::setitem, 2))?;
+    py_object.define_method("delete", method!(RubyxObject::delitem, 1))?;
     py_object.define_method(
         "respond_to_missing?",
         method!(RubyxObject::respond_to_missing, -1),
@@ -3237,7 +3240,9 @@ mod tests {
             let wrapper = RubyxObject::new(py_list, api).unwrap();
 
             // All of these should raise NoMethodError, not delegate to Python
-            for method in &["to_ary", "to_str", "to_hash", "to_int", "to_float", "to_io", "to_proc"] {
+            for method in &[
+                "to_ary", "to_str", "to_hash", "to_int", "to_float", "to_io", "to_proc",
+            ] {
                 let args = vec![(*method).into_value_with(ruby)];
                 let result = wrapper.method_missing(&args);
                 assert!(
@@ -3260,14 +3265,103 @@ mod tests {
             let wrapper = RubyxObject::new(json, api).unwrap();
 
             // json.loads and json.dumps should exist
-            assert!(wrapper.respond_to_missing(&["loads".into_value_with(ruby)]).unwrap());
-            assert!(wrapper.respond_to_missing(&["dumps".into_value_with(ruby)]).unwrap());
+            assert!(wrapper
+                .respond_to_missing(&["loads".into_value_with(ruby)])
+                .unwrap());
+            assert!(wrapper
+                .respond_to_missing(&["dumps".into_value_with(ruby)])
+                .unwrap());
 
             // json.nonexistent should not
-            assert!(!wrapper.respond_to_missing(&["nonexistent".into_value_with(ruby)]).unwrap());
+            assert!(!wrapper
+                .respond_to_missing(&["nonexistent".into_value_with(ruby)])
+                .unwrap());
 
             drop(wrapper);
             api.decref(json);
+        });
+    }
+
+    // ========== getitem / setitem / delitem integration ==========
+
+    #[test]
+    #[serial]
+    fn test_getitem_setitem_roundtrip() {
+        with_ruby_python(|ruby, api| {
+            let globals = make_globals(api);
+            let py_dict = api
+                .run_string("{'x': 10}", 258, globals, globals)
+                .expect("should create dict");
+            let wrapper = RubyxObject::new(py_dict, api).unwrap();
+
+            // Read existing
+            let key: magnus::Value = "x".into_value_with(ruby);
+            let result = wrapper.getitem(key).expect("should read 'x'");
+            let obj = magnus::typed_data::Obj::<RubyxObject>::try_convert(result).unwrap();
+            assert_eq!(api.long_to_i64(obj.as_ptr()), 10);
+
+            // Write new
+            let new_key: magnus::Value = "y".into_value_with(ruby);
+            let new_val: magnus::Value = 20_i64.into_value_with(ruby);
+            wrapper.setitem(new_key, new_val).expect("should set 'y'");
+
+            // Read back
+            let check: magnus::Value = "y".into_value_with(ruby);
+            let result2 = wrapper.getitem(check).expect("should read 'y'");
+            let obj2 = magnus::typed_data::Obj::<RubyxObject>::try_convert(result2).unwrap();
+            assert_eq!(api.long_to_i64(obj2.as_ptr()), 20);
+
+            drop(wrapper);
+            api.decref(py_dict);
+            api.decref(globals);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_delitem_then_getitem_fails() {
+        with_ruby_python(|ruby, api| {
+            let globals = make_globals(api);
+            let py_dict = api
+                .run_string("{'remove_me': 999}", 258, globals, globals)
+                .expect("should create dict");
+            let wrapper = RubyxObject::new(py_dict, api).unwrap();
+
+            let key: magnus::Value = "remove_me".into_value_with(ruby);
+            wrapper.delitem(key).expect("should delete key");
+
+            let check: magnus::Value = "remove_me".into_value_with(ruby);
+            assert!(wrapper.getitem(check).is_err(), "deleted key should not be found");
+
+            drop(wrapper);
+            api.decref(py_dict);
+            api.decref(globals);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_getitem_list_integration() {
+        with_ruby_python(|ruby, api| {
+            let globals = make_globals(api);
+            let py_list = api
+                .run_string("['a', 'b', 'c']", 258, globals, globals)
+                .expect("should create list");
+            let wrapper = RubyxObject::new(py_list, api).unwrap();
+
+            for (i, expected) in ["a", "b", "c"].iter().enumerate() {
+                let key: magnus::Value = (i as i64).into_value_with(ruby);
+                let result = wrapper.getitem(key).expect("should read index");
+                let obj = magnus::typed_data::Obj::<RubyxObject>::try_convert(result).unwrap();
+                assert_eq!(
+                    api.string_to_string(obj.as_ptr()),
+                    Some(expected.to_string())
+                );
+            }
+
+            drop(wrapper);
+            api.decref(py_list);
+            api.decref(globals);
         });
     }
 }

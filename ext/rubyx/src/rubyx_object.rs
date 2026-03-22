@@ -510,6 +510,81 @@ impl RubyxObject {
 
         sendable?.try_into()
     }
+
+    pub fn getitem(&self, key: Value) -> Result<Value, magnus::Error> {
+        let api = crate::api();
+        let gil = api.ensure_gil();
+        let ruby = Ruby::get()
+            .map_err(|e| magnus::Error::new(ruby_helpers::runtime_error(), e.to_string()))?;
+
+        let py_key = ruby_to_python(key, api)?;
+        let result = api.object_get_item(self.as_ptr(), py_key);
+        api.decref(py_key);
+
+        if result.is_null() {
+            let err = if let Some(exc) = PythonApi::extract_exception(api) {
+                magnus::Error::from(exc)
+            } else {
+                magnus::Error::new(ruby_helpers::runtime_error(), "KeyError or IndexError")
+            };
+            api.release_gil(gil);
+            return Err(err);
+        }
+
+        let wrapper = RubyxObject::new(result, api).ok_or_else(|| {
+            magnus::Error::new(ruby_helpers::runtime_error(), "Failed to wrap result")
+        })?;
+        api.release_gil(gil);
+        Ok(wrapper.into_value_with(&ruby))
+    }
+
+    pub fn setitem(&self, key: Value, value: Value) -> Result<Value, magnus::Error> {
+        let api = crate::api();
+        let gil = api.ensure_gil();
+
+        let py_key = ruby_to_python(key, api)?;
+        let py_val = ruby_to_python(value, api)?;
+        let result = api.object_set_item(self.as_ptr(), py_key, py_val);
+        api.decref(py_key);
+        api.decref(py_val);
+
+        if result == -1 {
+            let err = if let Some(exc) = PythonApi::extract_exception(api) {
+                magnus::Error::from(exc)
+            } else {
+                magnus::Error::new(ruby_helpers::runtime_error(), "Failed to set item")
+            };
+            api.release_gil(gil);
+            return Err(err);
+        }
+
+        api.release_gil(gil);
+        Ok(value)
+    }
+
+    pub fn delitem(&self, key: Value) -> Result<Value, magnus::Error> {
+        let api = crate::api();
+        let gil = api.ensure_gil();
+        let ruby = Ruby::get()
+            .map_err(|e| magnus::Error::new(ruby_helpers::runtime_error(), e.to_string()))?;
+
+        let py_key = ruby_to_python(key, api)?;
+        let result = api.object_del_item(self.as_ptr(), py_key);
+        api.decref(py_key);
+
+        if result == -1 {
+            let err = if let Some(exc) = PythonApi::extract_exception(api) {
+                magnus::Error::from(exc)
+            } else {
+                magnus::Error::new(ruby_helpers::runtime_error(), "Failed to delete item")
+            };
+            api.release_gil(gil);
+            return Err(err);
+        }
+
+        api.release_gil(gil);
+        Ok(ruby.qnil().as_value())
+    }
 }
 
 impl Drop for RubyxObject {
@@ -1004,6 +1079,258 @@ mod tests {
 
             drop(wrapper);
             api.decref(sys);
+        });
+    }
+
+    // ========== getitem / setitem / delitem tests ==========
+
+    #[test]
+    #[serial]
+    fn test_getitem_dict_string_key() {
+        with_ruby_python(|ruby, api| {
+            let globals = crate::eval::make_globals(api);
+            let py_dict = api
+                .run_string("{'name': 'Alice', 'age': 30}", 258, globals.ptr(), globals.ptr())
+                .expect("should create dict");
+            let wrapper = RubyxObject::new(py_dict, api).unwrap();
+
+            let key: magnus::Value = "name".into_value_with(ruby);
+            let result = wrapper.getitem(key).expect("getitem should succeed");
+            let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
+            assert_eq!(
+                api.string_to_string(obj.as_ptr()),
+                Some("Alice".to_string())
+            );
+
+            drop(wrapper);
+            api.decref(py_dict);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_getitem_dict_integer_key() {
+        with_ruby_python(|ruby, api| {
+            let globals = crate::eval::make_globals(api);
+            let py_dict = api
+                .run_string("{1: 'one', 2: 'two'}", 258, globals.ptr(), globals.ptr())
+                .expect("should create dict");
+            let wrapper = RubyxObject::new(py_dict, api).unwrap();
+
+            let key: magnus::Value = 1_i64.into_value_with(ruby);
+            let result = wrapper.getitem(key).expect("getitem should succeed");
+            let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
+            assert_eq!(
+                api.string_to_string(obj.as_ptr()),
+                Some("one".to_string())
+            );
+
+            drop(wrapper);
+            api.decref(py_dict);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_getitem_list_by_index() {
+        with_ruby_python(|ruby, api| {
+            let globals = crate::eval::make_globals(api);
+            let py_list = api
+                .run_string("[10, 20, 30]", 258, globals.ptr(), globals.ptr())
+                .expect("should create list");
+            let wrapper = RubyxObject::new(py_list, api).unwrap();
+
+            let key: magnus::Value = 1_i64.into_value_with(ruby);
+            let result = wrapper.getitem(key).expect("getitem should succeed");
+            let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
+            assert_eq!(api.long_to_i64(obj.as_ptr()), 20);
+
+            drop(wrapper);
+            api.decref(py_list);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_getitem_list_negative_index() {
+        with_ruby_python(|ruby, api| {
+            let globals = crate::eval::make_globals(api);
+            let py_list = api
+                .run_string("[10, 20, 30]", 258, globals.ptr(), globals.ptr())
+                .expect("should create list");
+            let wrapper = RubyxObject::new(py_list, api).unwrap();
+
+            // Python supports negative indexing
+            let key: magnus::Value = (-1_i64).into_value_with(ruby);
+            let result = wrapper.getitem(key).expect("getitem should succeed");
+            let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
+            assert_eq!(api.long_to_i64(obj.as_ptr()), 30);
+
+            drop(wrapper);
+            api.decref(py_list);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_getitem_missing_key_raises_error() {
+        with_ruby_python(|ruby, api| {
+            let globals = crate::eval::make_globals(api);
+            let py_dict = api
+                .run_string("{}", 258, globals.ptr(), globals.ptr())
+                .expect("should create empty dict");
+            let wrapper = RubyxObject::new(py_dict, api).unwrap();
+
+            let key: magnus::Value = "nope".into_value_with(ruby);
+            let result = wrapper.getitem(key);
+            assert!(result.is_err(), "missing key should raise error");
+
+            drop(wrapper);
+            api.decref(py_dict);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_getitem_index_out_of_range() {
+        with_ruby_python(|ruby, api| {
+            let globals = crate::eval::make_globals(api);
+            let py_list = api
+                .run_string("[1, 2]", 258, globals.ptr(), globals.ptr())
+                .expect("should create list");
+            let wrapper = RubyxObject::new(py_list, api).unwrap();
+
+            let key: magnus::Value = 99_i64.into_value_with(ruby);
+            let result = wrapper.getitem(key);
+            assert!(result.is_err(), "out of range index should raise error");
+
+            drop(wrapper);
+            api.decref(py_list);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_setitem_dict() {
+        with_ruby_python(|ruby, api| {
+            let globals = crate::eval::make_globals(api);
+            let py_dict = api
+                .run_string("{}", 258, globals.ptr(), globals.ptr())
+                .expect("should create empty dict");
+            let wrapper = RubyxObject::new(py_dict, api).unwrap();
+
+            let key: magnus::Value = "role".into_value_with(ruby);
+            let val: magnus::Value = "admin".into_value_with(ruby);
+            wrapper.setitem(key, val).expect("setitem should succeed");
+
+            // Verify the value was set
+            let check_key: magnus::Value = "role".into_value_with(ruby);
+            let result = wrapper.getitem(check_key).expect("should find new key");
+            let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
+            assert_eq!(
+                api.string_to_string(obj.as_ptr()),
+                Some("admin".to_string())
+            );
+
+            drop(wrapper);
+            api.decref(py_dict);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_setitem_list() {
+        with_ruby_python(|ruby, api| {
+            let globals = crate::eval::make_globals(api);
+            let py_list = api
+                .run_string("[1, 2, 3]", 258, globals.ptr(), globals.ptr())
+                .expect("should create list");
+            let wrapper = RubyxObject::new(py_list, api).unwrap();
+
+            let key: magnus::Value = 1_i64.into_value_with(ruby);
+            let val: magnus::Value = 99_i64.into_value_with(ruby);
+            wrapper.setitem(key, val).expect("setitem should succeed");
+
+            // Verify
+            let check_key: magnus::Value = 1_i64.into_value_with(ruby);
+            let result = wrapper.getitem(check_key).expect("should read index 1");
+            let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
+            assert_eq!(api.long_to_i64(obj.as_ptr()), 99);
+
+            drop(wrapper);
+            api.decref(py_list);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_setitem_overwrite_existing() {
+        with_ruby_python(|ruby, api| {
+            let globals = crate::eval::make_globals(api);
+            let py_dict = api
+                .run_string("{'x': 1}", 258, globals.ptr(), globals.ptr())
+                .expect("should create dict");
+            let wrapper = RubyxObject::new(py_dict, api).unwrap();
+
+            let key: magnus::Value = "x".into_value_with(ruby);
+            let val: magnus::Value = 42_i64.into_value_with(ruby);
+            wrapper.setitem(key, val).expect("setitem should succeed");
+
+            let check_key: magnus::Value = "x".into_value_with(ruby);
+            let result = wrapper.getitem(check_key).expect("should read key");
+            let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
+            assert_eq!(api.long_to_i64(obj.as_ptr()), 42);
+
+            drop(wrapper);
+            api.decref(py_dict);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_delitem_dict() {
+        with_ruby_python(|ruby, api| {
+            let globals = crate::eval::make_globals(api);
+            let py_dict = api
+                .run_string("{'a': 1, 'b': 2}", 258, globals.ptr(), globals.ptr())
+                .expect("should create dict");
+            let wrapper = RubyxObject::new(py_dict, api).unwrap();
+
+            let key: magnus::Value = "a".into_value_with(ruby);
+            wrapper.delitem(key).expect("delitem should succeed");
+
+            // Verify 'a' is gone
+            let check_key: magnus::Value = "a".into_value_with(ruby);
+            let result = wrapper.getitem(check_key);
+            assert!(result.is_err(), "'a' should be deleted");
+
+            // Verify 'b' still exists
+            let check_key_b: magnus::Value = "b".into_value_with(ruby);
+            let result_b = wrapper.getitem(check_key_b).expect("'b' should still exist");
+            let obj = Obj::<RubyxObject>::try_convert(result_b).expect("should be RubyxObject");
+            assert_eq!(api.long_to_i64(obj.as_ptr()), 2);
+
+            drop(wrapper);
+            api.decref(py_dict);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_delitem_missing_key_raises_error() {
+        with_ruby_python(|ruby, api| {
+            let globals = crate::eval::make_globals(api);
+            let py_dict = api
+                .run_string("{}", 258, globals.ptr(), globals.ptr())
+                .expect("should create empty dict");
+            let wrapper = RubyxObject::new(py_dict, api).unwrap();
+
+            let key: magnus::Value = "nope".into_value_with(ruby);
+            let result = wrapper.delitem(key);
+            assert!(result.is_err(), "deleting missing key should error");
+
+            drop(wrapper);
+            api.decref(py_dict);
         });
     }
 }

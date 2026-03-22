@@ -137,6 +137,16 @@ pub struct PythonApi {
         'static,
         unsafe extern "C" fn(instance: *mut PyObject, class: *mut PyObject) -> c_int,
     >,
+    py_object_get_item: Symbol<
+        'static,
+        unsafe extern "C" fn(o: *mut PyObject, key: *mut PyObject) -> *mut PyObject,
+    >,
+    py_object_set_item: Symbol<
+        'static,
+        unsafe extern "C" fn(o: *mut PyObject, key: *mut PyObject, value: *mut PyObject) -> c_int,
+    >,
+    py_object_del_item:
+        Symbol<'static, unsafe extern "C" fn(o: *mut PyObject, key: *mut PyObject) -> c_int>,
     py_object_call: Symbol<
         'static,
         unsafe extern "C" fn(
@@ -325,6 +335,19 @@ impl PythonApi {
         let py_object_is_instance: Symbol<
             unsafe extern "C" fn(*mut PyObject, *mut PyObject) -> c_int,
         > = lib.get(b"PyObject_IsInstance")?;
+        let py_object_get_item: Symbol<
+            unsafe extern "C" fn(o: *mut PyObject, key: *mut PyObject) -> *mut PyObject,
+        > = lib.get(b"PyObject_GetItem")?;
+        let py_object_set_item: Symbol<
+            unsafe extern "C" fn(
+                o: *mut PyObject,
+                key: *mut PyObject,
+                value: *mut PyObject,
+            ) -> c_int,
+        > = lib.get(b"PyObject_SetItem")?;
+        let py_object_del_item: Symbol<
+            unsafe extern "C" fn(o: *mut PyObject, key: *mut PyObject) -> c_int,
+        > = lib.get(b"PyObject_DelItem")?;
         let py_object_call: Symbol<
             unsafe extern "C" fn(
                 callable: *mut PyObject,
@@ -438,6 +461,9 @@ impl PythonApi {
             py_object_get_attr_string: std::mem::transmute(py_object_get_attr_string),
             py_object_str: std::mem::transmute(py_object_str),
             py_object_is_instance: std::mem::transmute(py_object_is_instance),
+            py_object_get_item: std::mem::transmute(py_object_get_item),
+            py_object_set_item: std::mem::transmute(py_object_set_item),
+            py_object_del_item: std::mem::transmute(py_object_del_item),
             py_object_call: std::mem::transmute(py_object_call),
             py_object_set_attr_string: std::mem::transmute(py_object_set_attr_string),
             py_object_has_attr_string: std::mem::transmute(py_object_has_attr_string),
@@ -607,6 +633,23 @@ impl PythonApi {
             return std::ptr::null_mut();
         }
         unsafe { (self.py_object_str)(obj) }
+    }
+
+    pub fn object_get_item(&self, obj: *mut PyObject, key: *mut PyObject) -> *mut PyObject {
+        unsafe { (self.py_object_get_item)(obj, key) }
+    }
+
+    pub fn object_set_item(
+        &self,
+        obj: *mut PyObject,
+        key: *mut PyObject,
+        value: *mut PyObject,
+    ) -> c_int {
+        unsafe { (self.py_object_set_item)(obj, key, value) }
+    }
+
+    pub fn object_del_item(&self, obj: *mut PyObject, key: *mut PyObject) -> c_int {
+        unsafe { (self.py_object_del_item)(obj, key) }
     }
 
     pub fn object_repr(&self, obj: *mut PyObject) -> String {
