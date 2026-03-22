@@ -78,6 +78,8 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
         "respond_to_missing?",
         method!(RubyxObject::respond_to_missing, -1),
     )?;
+    py_object.define_method("each", method!(RubyxObject::each, 0))?;
+    py_object.include_module(ruby.module_enumerable())?;
 
     // RubyxStream class with Enumerable
     let stream_class = rubyx_module.define_class("Stream", ruby.class_object())?;
@@ -3331,7 +3333,10 @@ mod tests {
             wrapper.delitem(key).expect("should delete key");
 
             let check: magnus::Value = "remove_me".into_value_with(ruby);
-            assert!(wrapper.getitem(check).is_err(), "deleted key should not be found");
+            assert!(
+                wrapper.getitem(check).is_err(),
+                "deleted key should not be found"
+            );
 
             drop(wrapper);
             api.decref(py_dict);

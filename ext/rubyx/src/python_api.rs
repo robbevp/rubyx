@@ -5740,4 +5740,273 @@ _loop = asyncio.new_event_loop()
         assert_eq!(result, "{'a': 1}");
         api.decref(dict);
     }
+
+    // ========== object_get_item / object_set_item / object_del_item tests ==========
+
+    #[test]
+    #[serial]
+    fn test_object_get_item_dict() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let globals = make_globals(api);
+        let dict = api
+            .run_string("{'x': 42}", PY_EVAL_INPUT, globals, globals)
+            .expect("should create dict");
+
+        let key = api.string_from_str("x");
+        let result = api.object_get_item(dict, key);
+        assert!(!result.is_null());
+        assert_eq!(api.long_to_i64(result), 42);
+
+        api.decref(result);
+        api.decref(key);
+        api.decref(dict);
+        api.decref(globals);
+    }
+
+    #[test]
+    #[serial]
+    fn test_object_get_item_list() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let globals = make_globals(api);
+        let list = api
+            .run_string("[10, 20, 30]", PY_EVAL_INPUT, globals, globals)
+            .expect("should create list");
+
+        let key = api.long_from_i64(1);
+        let result = api.object_get_item(list, key);
+        assert!(!result.is_null());
+        assert_eq!(api.long_to_i64(result), 20);
+
+        api.decref(result);
+        api.decref(key);
+        api.decref(list);
+        api.decref(globals);
+    }
+
+    #[test]
+    #[serial]
+    fn test_object_get_item_missing_key() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let globals = make_globals(api);
+        let dict = api
+            .run_string("{}", PY_EVAL_INPUT, globals, globals)
+            .expect("should create dict");
+
+        let key = api.string_from_str("missing");
+        let result = api.object_get_item(dict, key);
+        assert!(result.is_null(), "missing key should return null");
+        api.clear_error();
+
+        api.decref(key);
+        api.decref(dict);
+        api.decref(globals);
+    }
+
+    #[test]
+    #[serial]
+    fn test_object_set_item_dict() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let dict = api.dict_new();
+        let key = api.string_from_str("name");
+        let val = api.string_from_str("test");
+
+        let result = api.object_set_item(dict, key, val);
+        assert_eq!(result, 0, "set_item should return 0 on success");
+
+        // Verify
+        let got = api.object_get_item(dict, key);
+        assert!(!got.is_null());
+        assert_eq!(api.string_to_string(got), Some("test".to_string()));
+
+        api.decref(got);
+        api.decref(key);
+        api.decref(val);
+        api.decref(dict);
+    }
+
+    #[test]
+    #[serial]
+    fn test_object_del_item_dict() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let globals = make_globals(api);
+        let dict = api
+            .run_string("{'a': 1, 'b': 2}", PY_EVAL_INPUT, globals, globals)
+            .expect("should create dict");
+
+        let key = api.string_from_str("a");
+        let result = api.object_del_item(dict, key);
+        assert_eq!(result, 0, "del_item should return 0 on success");
+
+        // Verify 'a' is gone
+        let check = api.object_get_item(dict, key);
+        assert!(check.is_null(), "'a' should be deleted");
+        api.clear_error();
+
+        api.decref(key);
+        api.decref(dict);
+        api.decref(globals);
+    }
+
+    // ========== iteration via get_iter + iter_next ==========
+
+    #[test]
+    #[serial]
+    fn test_iterate_list_via_get_iter() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let globals = make_globals(api);
+        let list = api
+            .run_string("[100, 200, 300]", PY_EVAL_INPUT, globals, globals)
+            .expect("should create list");
+
+        let py_iter = api.object_get_iter(list);
+        assert!(!py_iter.is_null(), "list should be iterable");
+
+        let mut values = vec![];
+        loop {
+            let item = api.iter_next(py_iter);
+            if item.is_null() {
+                break;
+            }
+            values.push(api.long_to_i64(item));
+            api.decref(item);
+        }
+
+        assert_eq!(values, vec![100, 200, 300]);
+
+        api.decref(py_iter);
+        api.decref(list);
+        api.decref(globals);
+    }
+
+    #[test]
+    #[serial]
+    fn test_iterate_empty_list() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let globals = make_globals(api);
+        let list = api
+            .run_string("[]", PY_EVAL_INPUT, globals, globals)
+            .expect("should create empty list");
+
+        let py_iter = api.object_get_iter(list);
+        assert!(!py_iter.is_null());
+
+        let item = api.iter_next(py_iter);
+        assert!(item.is_null(), "empty list should yield nothing");
+        assert!(!api.has_error(), "StopIteration should not set error");
+
+        api.decref(py_iter);
+        api.decref(list);
+        api.decref(globals);
+    }
+
+    #[test]
+    #[serial]
+    fn test_iterate_dict_yields_keys() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let globals = make_globals(api);
+        let dict = api
+            .run_string("{'x': 1, 'y': 2}", PY_EVAL_INPUT, globals, globals)
+            .expect("should create dict");
+
+        let py_iter = api.object_get_iter(dict);
+        assert!(!py_iter.is_null(), "dict should be iterable");
+
+        let mut keys = vec![];
+        loop {
+            let item = api.iter_next(py_iter);
+            if item.is_null() {
+                break;
+            }
+            if let Some(s) = api.string_to_string(item) {
+                keys.push(s);
+            }
+            api.decref(item);
+        }
+
+        assert!(keys.contains(&"x".to_string()));
+        assert!(keys.contains(&"y".to_string()));
+        assert_eq!(keys.len(), 2);
+
+        api.decref(py_iter);
+        api.decref(dict);
+        api.decref(globals);
+    }
+
+    #[test]
+    #[serial]
+    fn test_iterate_string_yields_characters() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let py_str = api.string_from_str("abc");
+        let py_iter = api.object_get_iter(py_str);
+        assert!(!py_iter.is_null(), "string should be iterable");
+
+        let mut chars = vec![];
+        loop {
+            let item = api.iter_next(py_iter);
+            if item.is_null() {
+                break;
+            }
+            if let Some(s) = api.string_to_string(item) {
+                chars.push(s);
+            }
+            api.decref(item);
+        }
+
+        assert_eq!(chars, vec!["a", "b", "c"]);
+
+        api.decref(py_iter);
+        api.decref(py_str);
+    }
+
+    #[test]
+    #[serial]
+    fn test_get_iter_on_non_iterable_returns_null() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        let py_int = api.long_from_i64(42);
+        let py_iter = api.object_get_iter(py_int);
+        assert!(py_iter.is_null(), "int should not be iterable");
+        api.clear_error();
+
+        api.decref(py_int);
+    }
 }

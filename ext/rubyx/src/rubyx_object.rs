@@ -585,6 +585,64 @@ impl RubyxObject {
         api.release_gil(gil);
         Ok(ruby.qnil().as_value())
     }
+
+    pub fn each(&self) -> Result<Value, magnus::Error> {
+        let ruby = Ruby::get()
+            .map_err(|e| magnus::Error::new(ruby_helpers::runtime_error(), e.to_string()))?;
+
+        if !ruby.block_given() {
+            let receiver: Value = ruby.current_receiver()?;
+            return Ok(receiver.enumeratorize("each", ()).as_value());
+        }
+
+        let api = crate::api();
+        let gil = api.ensure_gil();
+
+        let py_iter = api.object_get_iter(self.as_ptr());
+        if py_iter.is_null() {
+            api.clear_error();
+            api.release_gil(gil);
+            return Err(magnus::Error::new(
+                ruby_helpers::type_error(),
+                "Python object is not iterable",
+            ));
+        }
+
+        // Use closure to ensure cleanup (decref + release_gil) runs on all paths,
+        // including early returns from yield_value (Ruby break) or wrap failures.
+        let result = (|| -> Result<(), magnus::Error> {
+            loop {
+                let item = api.iter_next(py_iter);
+                if item.is_null() {
+                    if api.has_error() {
+                        let exc = PythonApi::extract_exception(api);
+                        if let Some(e) = exc {
+                            return Err(magnus::Error::from(e));
+                        }
+                        return Err(magnus::Error::new(
+                            ruby_helpers::runtime_error(),
+                            "Python iteration error",
+                        ));
+                    }
+                    break;
+                }
+
+                let wrapper = RubyxObject::new(item, api).ok_or_else(|| {
+                    magnus::Error::new(ruby_helpers::runtime_error(), "Failed to wrap item")
+                })?;
+                let val = wrapper.into_value_with(&ruby);
+                let _: Value = ruby.yield_value(val)?;
+            }
+            Ok(())
+        })();
+
+        // Always cleanup — regardless of success or error
+        api.decref(py_iter);
+        api.release_gil(gil);
+
+        result?;
+        Ok(ruby.qnil().as_value())
+    }
 }
 
 impl Drop for RubyxObject {
@@ -1090,7 +1148,12 @@ mod tests {
         with_ruby_python(|ruby, api| {
             let globals = crate::eval::make_globals(api);
             let py_dict = api
-                .run_string("{'name': 'Alice', 'age': 30}", 258, globals.ptr(), globals.ptr())
+                .run_string(
+                    "{'name': 'Alice', 'age': 30}",
+                    258,
+                    globals.ptr(),
+                    globals.ptr(),
+                )
                 .expect("should create dict");
             let wrapper = RubyxObject::new(py_dict, api).unwrap();
 
@@ -1120,10 +1183,7 @@ mod tests {
             let key: magnus::Value = 1_i64.into_value_with(ruby);
             let result = wrapper.getitem(key).expect("getitem should succeed");
             let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
-            assert_eq!(
-                api.string_to_string(obj.as_ptr()),
-                Some("one".to_string())
-            );
+            assert_eq!(api.string_to_string(obj.as_ptr()), Some("one".to_string()));
 
             drop(wrapper);
             api.decref(py_dict);
@@ -1306,7 +1366,9 @@ mod tests {
 
             // Verify 'b' still exists
             let check_key_b: magnus::Value = "b".into_value_with(ruby);
-            let result_b = wrapper.getitem(check_key_b).expect("'b' should still exist");
+            let result_b = wrapper
+                .getitem(check_key_b)
+                .expect("'b' should still exist");
             let obj = Obj::<RubyxObject>::try_convert(result_b).expect("should be RubyxObject");
             assert_eq!(api.long_to_i64(obj.as_ptr()), 2);
 

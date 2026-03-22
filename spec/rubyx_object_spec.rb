@@ -359,6 +359,102 @@ RSpec.describe 'RubyxObject', ruby_integration: true do
     end
   end
 
+  # ========== each / Enumerable ==========
+
+  describe '#each' do
+    it 'iterates over a list' do
+      l = Rubyx.eval("[10, 20, 30]")
+      values = []
+      l.each { |item| values << item.to_ruby }
+      expect(values).to eq([10, 20, 30])
+    end
+
+    it 'iterates over an empty list' do
+      l = Rubyx.eval("[]")
+      values = []
+      l.each { |item| values << item }
+      expect(values).to be_empty
+    end
+
+    it 'iterates over dict keys' do
+      d = Rubyx.eval("{'a': 1, 'b': 2}")
+      keys = []
+      d.each { |key| keys << key.to_ruby }
+      expect(keys).to contain_exactly('a', 'b')
+    end
+
+    it 'iterates over a string (characters)' do
+      s = Rubyx.eval('"abc"')
+      chars = []
+      s.each { |c| chars << c.to_ruby }
+      expect(chars).to eq(%w[a b c])
+    end
+
+    it 'yields RubyxObject items' do
+      l = Rubyx.eval("[1, 2]")
+      l.each { |item| expect(item).to be_a(RubyxObject) }
+    end
+
+    it 'returns Enumerator when no block given' do
+      l = Rubyx.eval("[1, 2, 3]")
+      enum = l.each
+      expect(enum).to be_a(Enumerator)
+    end
+
+    it 'raises TypeError for non-iterable objects' do
+      obj = Rubyx.eval('42')
+      expect { obj.each {} }.to raise_error(StandardError, /not iterable/)
+    end
+  end
+
+  describe 'Enumerable methods' do
+    it '#map transforms values' do
+      l = Rubyx.eval("[1, 2, 3]")
+      result = l.map { |item| item.to_ruby * 10 }
+      expect(result).to eq([10, 20, 30])
+    end
+
+    it '#select filters values' do
+      l = Rubyx.eval("[1, 2, 3, 4, 5]")
+      result = l.select { |item| item.to_ruby > 3 }
+      expect(result.map(&:to_ruby)).to eq([4, 5])
+    end
+
+    it '#to_a collects all items' do
+      l = Rubyx.eval("[10, 20, 30]")
+      arr = l.to_a
+      expect(arr.length).to eq(3)
+      expect(arr.map(&:to_ruby)).to eq([10, 20, 30])
+    end
+
+    it '#first returns the first item' do
+      l = Rubyx.eval("[99, 88, 77]")
+      expect(l.first.to_ruby).to eq(99)
+    end
+
+    it '#count returns the number of items' do
+      l = Rubyx.eval("[1, 2, 3, 4]")
+      expect(l.count).to eq(4)
+    end
+
+    it '#reduce accumulates values' do
+      l = Rubyx.eval("[1, 2, 3, 4]")
+      sum = l.reduce(0) { |acc, item| acc + item.to_ruby }
+      expect(sum).to eq(10)
+    end
+
+    it '#any? works' do
+      l = Rubyx.eval("[1, 2, 3]")
+      expect(l.any? { |item| item.to_ruby == 2 }).to be true
+      expect(l.any? { |item| item.to_ruby == 99 }).to be false
+    end
+
+    it '#none? works' do
+      l = Rubyx.eval("[1, 2, 3]")
+      expect(l.none? { |item| item.to_ruby > 10 }).to be true
+    end
+  end
+
   # ========== class identity ==========
 
   describe 'class identity' do
