@@ -8,6 +8,19 @@ use magnus::r_hash::ForEach;
 use magnus::typed_data::Obj;
 use magnus::value::ReprValue;
 use magnus::{IntoValue, RHash, Ruby, Symbol, TryConvert, Value};
+use std::ffi::CString;
+
+const RUBY_IMPLICIT_CONVERSIONS: &[&str] = &[
+    "to_ary",
+    "to_str",
+    "to_hash",
+    "to_int",
+    "to_float",
+    "to_io",
+    "to_proc",
+    "to_path",
+    "to_regexp",
+];
 
 pub(crate) fn python_to_sendable(
     py_val: *mut PyObject,
@@ -80,7 +93,6 @@ pub(crate) fn python_to_sendable(
     }
     Err("Cannot convert Python value to Ruby".to_string())
 }
-#[allow(dead_code)]
 fn ruby_to_python(value: Value, api: &PythonApi) -> Result<*mut PyObject, magnus::Error> {
     let ruby = Ruby::get().map_err(|e| {
         magnus::Error::new(
@@ -262,6 +274,13 @@ impl RubyxObject {
                 ));
             };
 
+            if RUBY_IMPLICIT_CONVERSIONS.contains(&method_name.as_str()) {
+                return Err(magnus::Error::new(
+                    ruby_helpers::no_method_error(),
+                    format!("undefined method '{}' for RubyxObject", method_name),
+                ));
+            }
+
             // Setter - `obj.foo = value`
             if method_name.ends_with("=") {
                 if args.len() != 2 {
@@ -425,6 +444,33 @@ impl RubyxObject {
         })();
         api.release_gil(gil);
         result
+    }
+
+    pub fn respond_to_missing(&self, args: &[magnus::Value]) -> Result<bool, magnus::Error> {
+        if args.is_empty() {
+            return Err(magnus::Error::new(
+                ruby_helpers::arg_error(),
+                "No method name given",
+            ));
+        }
+        let name = if let Ok(s) = String::try_convert(args[0]) {
+            s
+        } else if let Ok(sym) = Symbol::try_convert(args[0]) {
+            sym.name()?.to_string()
+        } else {
+            return Err(magnus::Error::new(
+                ruby_helpers::type_error(),
+                "method_missing expects Symbol/String method name",
+            ));
+        };
+
+        let api = crate::api();
+        let gil = api.ensure_gil();
+        let c_name = CString::new(name.as_str())
+            .map_err(|_| magnus::Error::new(ruby_helpers::arg_error(), "Invalid method name"))?;
+        let result = api.object_has_attr_string(self.as_ptr(), c_name.as_ptr()) != 0;
+        api.release_gil(gil);
+        Ok(result)
     }
 
     pub fn to_s(&self) -> Result<String, magnus::Error> {
@@ -792,6 +838,172 @@ mod tests {
 
             drop(wrapper);
             api.decref(json);
+        });
+    }
+
+    // ========== respond_to_missing? tests ==========
+
+    #[test]
+    #[serial]
+    fn test_respond_to_missing_existing_attr() {
+        with_ruby_python(|ruby, api| {
+            let sys = api.import_module("sys").expect("sys should import");
+            let wrapper = RubyxObject::new(sys, api).unwrap();
+
+            // sys.version exists
+            let args = vec!["version".into_value_with(ruby)];
+            let result = wrapper.respond_to_missing(&args).expect("should not error");
+            assert!(result, "sys.version should exist");
+
+            drop(wrapper);
+            api.decref(sys);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_respond_to_missing_nonexistent_attr() {
+        with_ruby_python(|ruby, api| {
+            let sys = api.import_module("sys").expect("sys should import");
+            let wrapper = RubyxObject::new(sys, api).unwrap();
+
+            let args = vec!["nonexistent_xyz_123".into_value_with(ruby)];
+            let result = wrapper.respond_to_missing(&args).expect("should not error");
+            assert!(!result, "nonexistent attr should return false");
+
+            drop(wrapper);
+            api.decref(sys);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_respond_to_missing_callable_method() {
+        with_ruby_python(|ruby, api| {
+            let json = api.import_module("json").expect("json should import");
+            let wrapper = RubyxObject::new(json, api).unwrap();
+
+            let args = vec!["loads".into_value_with(ruby)];
+            let result = wrapper.respond_to_missing(&args).expect("should not error");
+            assert!(result, "json.loads should exist");
+
+            drop(wrapper);
+            api.decref(json);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_respond_to_missing_with_string_arg() {
+        with_ruby_python(|ruby, api| {
+            let sys = api.import_module("sys").expect("sys should import");
+            let wrapper = RubyxObject::new(sys, api).unwrap();
+
+            // Pass string instead of symbol
+            let args = vec!["version".into_value_with(ruby)];
+            let result = wrapper.respond_to_missing(&args).expect("should not error");
+            assert!(result, "should accept string arg too");
+
+            drop(wrapper);
+            api.decref(sys);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_respond_to_missing_empty_args_errors() {
+        with_ruby_python(|_ruby, api| {
+            let sys = api.import_module("sys").expect("sys should import");
+            let wrapper = RubyxObject::new(sys, api).unwrap();
+
+            let result = wrapper.respond_to_missing(&[]);
+            assert!(result.is_err(), "empty args should error");
+
+            drop(wrapper);
+            api.decref(sys);
+        });
+    }
+
+    // ========== implicit conversion guards ==========
+
+    #[test]
+    #[serial]
+    fn test_method_missing_guards_to_ary() {
+        with_ruby_python(|ruby, api| {
+            let py_int = api.long_from_i64(42);
+            let wrapper = RubyxObject::new(py_int, api).unwrap();
+
+            let args = vec!["to_ary".into_value_with(ruby)];
+            let result = wrapper.method_missing(&args);
+            assert!(result.is_err(), "to_ary should be guarded");
+
+            drop(wrapper);
+            api.decref(py_int);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_method_missing_guards_to_str() {
+        with_ruby_python(|ruby, api| {
+            let py_int = api.long_from_i64(42);
+            let wrapper = RubyxObject::new(py_int, api).unwrap();
+
+            let args = vec!["to_str".into_value_with(ruby)];
+            let result = wrapper.method_missing(&args);
+            assert!(result.is_err(), "to_str should be guarded");
+
+            drop(wrapper);
+            api.decref(py_int);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_method_missing_guards_to_hash() {
+        with_ruby_python(|ruby, api| {
+            let py_int = api.long_from_i64(42);
+            let wrapper = RubyxObject::new(py_int, api).unwrap();
+
+            let args = vec!["to_hash".into_value_with(ruby)];
+            let result = wrapper.method_missing(&args);
+            assert!(result.is_err(), "to_hash should be guarded");
+
+            drop(wrapper);
+            api.decref(py_int);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_method_missing_guards_to_int() {
+        with_ruby_python(|ruby, api| {
+            let py_int = api.long_from_i64(42);
+            let wrapper = RubyxObject::new(py_int, api).unwrap();
+
+            let args = vec!["to_int".into_value_with(ruby)];
+            let result = wrapper.method_missing(&args);
+            assert!(result.is_err(), "to_int should be guarded");
+
+            drop(wrapper);
+            api.decref(py_int);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_method_missing_allows_regular_methods() {
+        with_ruby_python(|ruby, api| {
+            let sys = api.import_module("sys").expect("sys should import");
+            let wrapper = RubyxObject::new(sys, api).unwrap();
+
+            // "version" is not guarded — should delegate to Python
+            let args = vec!["version".into_value_with(ruby)];
+            let result = wrapper.method_missing(&args);
+            assert!(result.is_ok(), "regular attributes should not be guarded");
+
+            drop(wrapper);
+            api.decref(sys);
         });
     }
 }

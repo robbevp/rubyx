@@ -49,6 +49,26 @@ RSpec.describe 'RubyxObject', ruby_integration: true do
       expect { print obj }.to output('42').to_stdout
     end
 
+    it 'works with puts' do
+      obj = Rubyx.eval('42')
+      expect { puts obj }.to output("42\n").to_stdout
+    end
+
+    it 'works with puts for string' do
+      obj = Rubyx.eval('"hello"')
+      expect { puts obj }.to output("hello\n").to_stdout
+    end
+
+    it 'works with puts for None' do
+      obj = Rubyx.eval('None')
+      expect { puts obj }.to output("None\n").to_stdout
+    end
+
+    it 'works with puts for list' do
+      obj = Rubyx.eval('[1, 2, 3]')
+      expect { puts obj }.to output("[1, 2, 3]\n").to_stdout
+    end
+
     it 'works with string interpolation' do
       obj = Rubyx.eval('"world"')
       expect("hello #{obj}").to eq('hello world')
@@ -187,6 +207,72 @@ RSpec.describe 'RubyxObject', ruby_integration: true do
       json_mod = ctx.eval("json")
       result = json_mod.loads('[1, 2, 3]')
       expect(result.to_ruby).to eq([1, 2, 3])
+    end
+  end
+
+  # ========== respond_to? ==========
+
+  describe '#respond_to?' do
+    it 'returns true for existing Python attributes' do
+      sys = Rubyx.import('sys')
+      expect(sys.respond_to?(:version)).to be true
+    end
+
+    it 'returns false for nonexistent attributes' do
+      sys = Rubyx.import('sys')
+      expect(sys.respond_to?(:nonexistent_xyz_123)).to be false
+    end
+
+    it 'returns true for callable methods' do
+      ctx = Rubyx.context
+      ctx.eval("import json")
+      json_mod = ctx.eval("json")
+      expect(json_mod.respond_to?(:loads)).to be true
+      expect(json_mod.respond_to?(:dumps)).to be true
+    end
+
+    it 'returns true for to_s (Ruby method)' do
+      obj = Rubyx.eval('42')
+      expect(obj.respond_to?(:to_s)).to be true
+    end
+
+    it 'returns true for inspect (Ruby method)' do
+      obj = Rubyx.eval('42')
+      expect(obj.respond_to?(:inspect)).to be true
+    end
+
+    it 'returns true for to_ruby (Ruby method)' do
+      obj = Rubyx.eval('42')
+      expect(obj.respond_to?(:to_ruby)).to be true
+    end
+  end
+
+  # ========== implicit conversion guards ==========
+
+  describe 'implicit conversion guards' do
+    it 'does not delegate to_ary to Python' do
+      obj = Rubyx.eval('42')
+      expect { obj.to_ary }.to raise_error(NoMethodError)
+    end
+
+    it 'does not delegate to_str to Python' do
+      obj = Rubyx.eval('42')
+      expect { obj.to_str }.to raise_error(NoMethodError)
+    end
+
+    it 'does not delegate to_hash to Python' do
+      obj = Rubyx.eval('42')
+      expect { obj.to_hash }.to raise_error(NoMethodError)
+    end
+
+    it 'does not delegate to_int to Python' do
+      obj = Rubyx.eval('42')
+      expect { obj.to_int }.to raise_error(NoMethodError)
+    end
+
+    it 'does not delegate to_float to Python' do
+      obj = Rubyx.eval('42')
+      expect { obj.to_float }.to raise_error(NoMethodError)
     end
   end
 

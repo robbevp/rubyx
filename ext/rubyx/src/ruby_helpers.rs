@@ -41,3 +41,9 @@ pub(crate) fn exception() -> ExceptionClass {
     let ruby = magnus::Ruby::get().expect("must be called from Ruby thread");
     ruby.exception_exception()
 }
+
+/// Returns Ruby's `NoMethodError` exception class.
+pub(crate) fn no_method_error() -> ExceptionClass {
+    let ruby = magnus::Ruby::get().expect("must be called from Ruby thread");
+    ruby.exception_no_method_error()
+}
