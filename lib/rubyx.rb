@@ -42,6 +42,7 @@ rescue LoadError
 end
 
 require_relative 'rubyx/uv'
+require_relative 'rubyx/railtie' if defined?(::Rails::Railtie)
 
 module Rubyx
   # Import a Python module by name.
