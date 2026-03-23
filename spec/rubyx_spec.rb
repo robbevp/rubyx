@@ -23,6 +23,80 @@ RSpec.describe 'Rubyx', ruby_integration: true do
     it 'responds to .async_stream' do
       expect(Rubyx).to respond_to(:async_stream)
     end
+
+    it 'responds to .initialized?' do
+      expect(Rubyx).to respond_to(:initialized?)
+    end
+  end
+
+  # ========== Rubyx.initialized? ==========
+
+  describe '.initialized?' do
+    it 'returns true after initialization' do
+      expect(Rubyx.initialized?).to eq(true)
+    end
+
+    it 'returns a boolean' do
+      expect(Rubyx.initialized?).to be(true).or be(false)
+    end
+  end
+
+  # ========== Error class mapping ==========
+
+  describe 'error classes' do
+    it 'defines error hierarchy' do
+      expect(Rubyx::Error.superclass).to eq(StandardError)
+      expect(Rubyx::PythonError.superclass).to eq(Rubyx::Error)
+      expect(Rubyx::ImportError.superclass).to eq(Rubyx::PythonError)
+      expect(Rubyx::KeyError.superclass).to eq(Rubyx::Error)
+      expect(Rubyx::IndexError.superclass).to eq(Rubyx::Error)
+      expect(Rubyx::ValueError.superclass).to eq(Rubyx::Error)
+      expect(Rubyx::AttributeError.superclass).to eq(Rubyx::Error)
+      expect(Rubyx::TypeError.superclass).to eq(Rubyx::Error)
+    end
+
+    it 'raises Rubyx::KeyError for dict key miss' do
+      expect { Rubyx.eval('{}["missing"]') }.to raise_error(Rubyx::KeyError)
+    end
+
+    it 'raises Rubyx::IndexError for list index out of range' do
+      expect { Rubyx.eval('[][5]') }.to raise_error(Rubyx::IndexError)
+    end
+
+    it 'raises Rubyx::ValueError for invalid conversion' do
+      expect { Rubyx.eval('int("not_a_number")') }.to raise_error(Rubyx::ValueError)
+    end
+
+    it 'raises Rubyx::TypeError for type mismatch' do
+      expect { Rubyx.eval('1 + "a"') }.to raise_error(Rubyx::TypeError)
+    end
+
+    it 'raises Rubyx::AttributeError for missing attribute' do
+      expect { Rubyx.eval('(1).nonexistent') }.to raise_error(Rubyx::AttributeError)
+    end
+
+    it 'raises Rubyx::ImportError for missing module' do
+      expect { Rubyx.import('nonexistent_module_xyz') }.to raise_error(Rubyx::ImportError)
+    end
+
+    it 'raises Rubyx::PythonError for unmapped Python errors' do
+      expect { Rubyx.eval('1/0') }.to raise_error(Rubyx::PythonError)
+    end
+
+    it 'all mapped errors are subclasses of Rubyx::Error' do
+      expect { Rubyx.eval('{}["x"]') }.to raise_error(Rubyx::Error)
+      expect { Rubyx.eval('[][0]') }.to raise_error(Rubyx::Error)
+      expect { Rubyx.eval('int("x")') }.to raise_error(Rubyx::Error)
+      expect { Rubyx.eval('1 + "x"') }.to raise_error(Rubyx::Error)
+    end
+
+    it 'includes Python error message in exception' do
+      begin
+        Rubyx.eval('{}["missing"]')
+      rescue Rubyx::KeyError => e
+        expect(e.message).to include('missing')
+      end
+    end
   end
 
   # ========== Rubyx.eval ==========

@@ -9,6 +9,16 @@ module Rubyx
 
   class InvalidModuleNameError < Error; end
 
+  class KeyError < Error; end
+
+  class IndexError < Error; end
+
+  class ValueError < Error; end
+
+  class AttributeError < Error; end
+
+  class TypeError < Error; end
+
   module Uv
     class Error < Rubyx::Error; end
 

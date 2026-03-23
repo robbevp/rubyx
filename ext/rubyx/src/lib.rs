@@ -49,6 +49,7 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
     let rubyx_module = ruby.define_module("Rubyx")?;
 
     rubyx_module.define_singleton_method("init", function!(rubyx_init, 4))?;
+    rubyx_module.define_singleton_method("initialized?", function!(rubyx_initialized, 0))?;
 
     // Module Class Methods
     rubyx_module.define_singleton_method("_import", function!(crate::import::rubyx_import, 1))?;
@@ -171,6 +172,10 @@ fn rubyx_async_await(coroutine: Value) -> Result<future::RubyxFuture, magnus::Er
 
     api.release_gil(gil);
     Ok(future)
+}
+
+fn rubyx_initialized() -> bool {
+    API.get().is_some()
 }
 
 /// `rubyx_init`: accept config paths and initialize from ruby
@@ -2602,6 +2607,16 @@ mod tests {
         assert!(api.is_initialized());
     }
 
+    #[test]
+    #[serial]
+    fn test_rubyx_initialized_returns_true_after_init() {
+        if crate::API.get().is_none() {
+            println!("Skipping: Python not available");
+            return;
+        }
+        assert!(crate::rubyx_initialized());
+    }
+
     // ========== to_s tests ==========
 
     #[test]
@@ -3620,6 +3635,171 @@ mod tests {
 
             api.decref(coroutine);
             api.decref(globals);
+        });
+    }
+
+    // ========== error class mapping tests ==========
+
+    #[test]
+    #[serial]
+    fn test_error_mapping_key_error() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+        let globals = test_make_globals(api);
+
+        let result = api.run_string("{}['missing']", EVAL_INPUT, globals, globals);
+        let py_obj = result.unwrap();
+        assert!(py_obj.is_null());
+        let exc = PythonApi::extract_exception(api);
+        assert!(exc.is_some());
+        if let Some(crate::exception::PythonException::Exception { kind, .. }) = &exc {
+            assert_eq!(kind, "KeyError");
+        } else {
+            panic!("Expected KeyError, got: {:?}", exc);
+        }
+        api.decref(globals);
+    }
+
+    #[test]
+    #[serial]
+    fn test_error_mapping_index_error() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+        let globals = test_make_globals(api);
+
+        let result = api.run_string("[][5]", EVAL_INPUT, globals, globals);
+        let py_obj = result.unwrap();
+        assert!(py_obj.is_null());
+        let exc = PythonApi::extract_exception(api);
+        if let Some(crate::exception::PythonException::Exception { kind, .. }) = &exc {
+            assert_eq!(kind, "IndexError");
+        } else {
+            panic!("Expected IndexError, got: {:?}", exc);
+        }
+        api.decref(globals);
+    }
+
+    #[test]
+    #[serial]
+    fn test_error_mapping_value_error() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+        let globals = test_make_globals(api);
+
+        let result = api.run_string("int('bad')", EVAL_INPUT, globals, globals);
+        let py_obj = result.unwrap();
+        assert!(py_obj.is_null());
+        let exc = PythonApi::extract_exception(api);
+        if let Some(crate::exception::PythonException::Exception { kind, .. }) = &exc {
+            assert_eq!(kind, "ValueError");
+        } else {
+            panic!("Expected ValueError, got: {:?}", exc);
+        }
+        api.decref(globals);
+    }
+
+    #[test]
+    #[serial]
+    fn test_error_mapping_type_error() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+        let globals = test_make_globals(api);
+
+        let result = api.run_string("1 + 'a'", EVAL_INPUT, globals, globals);
+        let py_obj = result.unwrap();
+        assert!(py_obj.is_null());
+        let exc = PythonApi::extract_exception(api);
+        if let Some(crate::exception::PythonException::Exception { kind, .. }) = &exc {
+            assert_eq!(kind, "TypeError");
+        } else {
+            panic!("Expected TypeError, got: {:?}", exc);
+        }
+        api.decref(globals);
+    }
+
+    #[test]
+    #[serial]
+    fn test_error_mapping_attribute_error() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+        let globals = test_make_globals(api);
+
+        let result = api.run_string("(1).nonexistent", EVAL_INPUT, globals, globals);
+        let py_obj = result.unwrap();
+        assert!(py_obj.is_null());
+        let exc = PythonApi::extract_exception(api);
+        if let Some(crate::exception::PythonException::Exception { kind, .. }) = &exc {
+            assert_eq!(kind, "AttributeError");
+        } else {
+            panic!("Expected AttributeError, got: {:?}", exc);
+        }
+        api.decref(globals);
+    }
+
+    #[test]
+    #[serial]
+    fn test_error_mapping_zero_division_falls_to_python_error() {
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+        let globals = test_make_globals(api);
+
+        let result = api.run_string("1/0", EVAL_INPUT, globals, globals);
+        let py_obj = result.unwrap();
+        assert!(py_obj.is_null());
+        let exc = PythonApi::extract_exception(api);
+        if let Some(crate::exception::PythonException::Exception { kind, .. }) = &exc {
+            assert_eq!(kind, "ZeroDivisionError");
+        } else {
+            panic!("Expected ZeroDivisionError, got: {:?}", exc);
+        }
+        api.decref(globals);
+    }
+
+    #[test]
+    #[serial]
+    fn test_rubyx_exception_class_maps_known_kinds() {
+        with_ruby_python(|_ruby, _api| {
+            use crate::ruby_helpers::rubyx_exception_class;
+
+            let key_err = rubyx_exception_class("KeyError");
+            let idx_err = rubyx_exception_class("IndexError");
+            let val_err = rubyx_exception_class("ValueError");
+            let typ_err = rubyx_exception_class("TypeError");
+            let attr_err = rubyx_exception_class("AttributeError");
+            let imp_err = rubyx_exception_class("ImportError");
+            let mnf_err = rubyx_exception_class("ModuleNotFoundError");
+            let unknown = rubyx_exception_class("ZeroDivisionError");
+
+            // Verify mapped types resolve to Rubyx:: classes, not RuntimeError
+            use magnus::Class;
+            let class_name = |c: magnus::ExceptionClass| -> String {
+                unsafe { c.name().to_string() }
+            };
+
+            assert_eq!(class_name(key_err), "Rubyx::KeyError");
+            assert_eq!(class_name(idx_err), "Rubyx::IndexError");
+            assert_eq!(class_name(val_err), "Rubyx::ValueError");
+            assert_eq!(class_name(typ_err), "Rubyx::TypeError");
+            assert_eq!(class_name(attr_err), "Rubyx::AttributeError");
+            assert_eq!(class_name(imp_err), "Rubyx::ImportError");
+
+            // ModuleNotFoundError maps to ImportError
+            assert_eq!(class_name(mnf_err), "Rubyx::ImportError");
+
+            // Unmapped kinds fall back to PythonError
+            assert_eq!(class_name(unknown), "Rubyx::PythonError");
         });
     }
 

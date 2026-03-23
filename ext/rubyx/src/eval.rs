@@ -92,25 +92,24 @@ pub(crate) fn eval_with_globals(
     let py_result = match api.run_string(code, PY_EVAL_INPUT, globals, globals) {
         Ok(output) if !output.is_null() => output,
         Ok(_) => {
-            // Expression eval failed — check if it's a syntax error
-            // (which means it might contain statements)
-            let is_syntax = api.has_error() && {
-                let exc = PythonApi::extract_exception(api);
-                matches!(
-                    exc,
-                    Some(crate::exception::PythonException::SyntaxError { .. })
-                )
+            // Expression eval failed — extract the exception to check type.
+            // extract_exception consumes the error, so we must save it.
+            let exc = if api.has_error() {
+                PythonApi::extract_exception(api)
+            } else {
+                None
             };
 
+            let is_syntax = matches!(
+                exc,
+                Some(crate::exception::PythonException::SyntaxError { .. })
+            );
+
             if !is_syntax {
-                // Real error (NameError, etc.) — not a syntax issue
-                let err = if !api.has_error() {
-                    Error::new(runtime_error(), "Python execution failed")
-                } else {
-                    PythonApi::extract_exception(api)
-                        .map(Error::from)
-                        .unwrap_or_else(|| Error::new(runtime_error(), "Python execution failed"))
-                };
+                // Real error (NameError, KeyError, etc.) — not a syntax issue
+                let err = exc
+                    .map(Error::from)
+                    .unwrap_or_else(|| Error::new(runtime_error(), "Python execution failed"));
                 return Err(err);
             }
 

@@ -10,7 +10,7 @@
 //! behaviour of the deprecated `magnus::exception::*()` functions, and all
 //! code paths that reach these helpers originate from Ruby callbacks registered
 //! via magnus, where `Ruby::get()` is guaranteed to succeed.
-use magnus::ExceptionClass;
+use magnus::{ExceptionClass, Module};
 
 /// Returns Ruby's `RuntimeError` exception class.
 pub(crate) fn runtime_error() -> ExceptionClass {
@@ -46,4 +46,29 @@ pub(crate) fn exception() -> ExceptionClass {
 pub(crate) fn no_method_error() -> ExceptionClass {
     let ruby = magnus::Ruby::get().expect("must be called from Ruby thread");
     ruby.exception_no_method_error()
+}
+
+/// Look up a Rubyx error class by Python exception kind.
+/// Falls back to `Rubyx::PythonError` for unrecognized kinds,
+/// and `RuntimeError` if the Rubyx module isn't available.
+pub(crate) fn rubyx_exception_class(kind: &str) -> ExceptionClass {
+    let ruby = magnus::Ruby::get().expect("must be called from Ruby thread");
+    let rubyx = match ruby.define_module("Rubyx") {
+        Ok(m) => m,
+        Err(_) => return ruby.exception_runtime_error(),
+    };
+
+    let class_name = match kind {
+        "KeyError" => "KeyError",
+        "IndexError" => "IndexError",
+        "ValueError" => "ValueError",
+        "AttributeError" => "AttributeError",
+        "TypeError" => "TypeError",
+        "ImportError" | "ModuleNotFoundError" => "ImportError",
+        _ => "PythonError",
+    };
+
+    rubyx
+        .const_get::<_, ExceptionClass>(class_name)
+        .unwrap_or_else(|_| ruby.exception_runtime_error())
 }
