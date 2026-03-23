@@ -40,8 +40,10 @@ impl RubyxContext {
         globals_hash: RHash,
     ) -> Result<magnus::Value, magnus::Error> {
         let gil = self.api.ensure_gil();
-        self.inject_globals(globals_hash)?;
-        let result = eval_with_globals(&code, self.globals, self.api);
+        let result = match self.inject_globals(globals_hash) {
+            Ok(()) => eval_with_globals(&code, self.globals, self.api),
+            Err(e) => Err(e),
+        };
         self.api.release_gil(gil);
         result
     }
@@ -59,8 +61,10 @@ impl RubyxContext {
         globals_hash: RHash,
     ) -> Result<magnus::Value, magnus::Error> {
         let gil = self.api.ensure_gil();
-        self.inject_globals(globals_hash)?;
-        let result = await_eval_with_globals(&code, self.globals, self.api);
+        let result = match self.inject_globals(globals_hash) {
+            Ok(()) => await_eval_with_globals(&code, self.globals, self.api),
+            Err(e) => Err(e),
+        };
         self.api.release_gil(gil);
         result
     }
@@ -114,7 +118,11 @@ impl RubyxContext {
         globals_hash: RHash,
     ) -> Result<crate::future::RubyxFuture, magnus::Error> {
         let gil = self.api.ensure_gil();
-        self.inject_globals(globals_hash)?;
+
+        if let Err(e) = self.inject_globals(globals_hash) {
+            self.api.release_gil(gil);
+            return Err(e);
+        }
 
         let py_coroutine = match self.api.run_string(&code, 258, self.globals, self.globals) {
             Ok(obj) if !obj.is_null() => obj,

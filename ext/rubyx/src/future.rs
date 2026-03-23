@@ -98,6 +98,11 @@ fn run_asyncio_sendable(
     }
 
     let args = unsafe { (api.py_tuple_new)(1) };
+    if args.is_null() {
+        api.decref(run_fn);
+        api.decref(asyncio);
+        return Err("Failed to allocate argument tuple".to_string());
+    }
     api.incref(coroutine);
     unsafe { (api.py_tuple_set_item)(args, 0, coroutine) };
 

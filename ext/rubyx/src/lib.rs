@@ -3638,6 +3638,215 @@ mod tests {
         });
     }
 
+    // ========== GIL safety regression tests ==========
+    // These tests ensure GIL is always released on error paths.
+    // A leaked GIL would deadlock subsequent tests (serial execution).
+
+    #[test]
+    #[serial]
+    fn test_eval_with_globals_releases_gil_on_python_error() {
+        with_ruby_python(|ruby, api| {
+            let hash = magnus::RHash::new();
+            hash.aset(ruby.sym_new("x"), 1_i64.into_value_with(ruby))
+                .unwrap();
+
+            // This should fail (NameError: 'undefined_var') but NOT leak the GIL
+            let result = crate::eval::rubyx_eval_with_globals(
+                "x + undefined_var".to_string(),
+                hash,
+            );
+            assert!(result.is_err(), "should fail for undefined variable");
+
+            // Prove GIL is released: we can acquire it again without deadlocking
+            let gil = api.ensure_gil();
+            let check = api.run_string("1 + 1", EVAL_INPUT, test_make_globals(api), test_make_globals(api));
+            assert!(check.is_ok());
+            api.decref(check.unwrap());
+            api.release_gil(gil);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_eval_with_globals_releases_gil_on_syntax_error() {
+        with_ruby_python(|ruby, api| {
+            let hash = magnus::RHash::new();
+            hash.aset(ruby.sym_new("x"), 1_i64.into_value_with(ruby))
+                .unwrap();
+
+            let result = crate::eval::rubyx_eval_with_globals(
+                "def".to_string(),
+                hash,
+            );
+            assert!(result.is_err(), "should fail on syntax error");
+
+            // GIL should be released — acquire again to verify
+            let gil = api.ensure_gil();
+            let check = api.run_string("2 + 2", EVAL_INPUT, test_make_globals(api), test_make_globals(api));
+            assert!(check.is_ok());
+            api.decref(check.unwrap());
+            api.release_gil(gil);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_await_with_globals_releases_gil_on_error() {
+        with_ruby_python(|ruby, api| {
+            let hash = magnus::RHash::new();
+            hash.aset(ruby.sym_new("x"), 1_i64.into_value_with(ruby))
+                .unwrap();
+
+            // Invalid code — should error but release GIL
+            let result = crate::eval::rubyx_await_with_globals(
+                "undefined_coroutine()".to_string(),
+                hash,
+            );
+            assert!(result.is_err());
+
+            // Verify GIL is free
+            let gil = api.ensure_gil();
+            let check = api.run_string("3 + 3", EVAL_INPUT, test_make_globals(api), test_make_globals(api));
+            assert!(check.is_ok());
+            api.decref(check.unwrap());
+            api.release_gil(gil);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_async_await_with_globals_releases_gil_on_error() {
+        with_ruby_python(|ruby, api| {
+            let hash = magnus::RHash::new();
+            hash.aset(ruby.sym_new("x"), 1_i64.into_value_with(ruby))
+                .unwrap();
+
+            // Invalid code — should error but release GIL
+            let result = crate::eval::rubyx_async_await_with_globals(
+                "undefined_async()".to_string(),
+                hash,
+            );
+            assert!(result.is_err());
+
+            // Verify GIL is free
+            let gil = api.ensure_gil();
+            let check = api.run_string("4 + 4", EVAL_INPUT, test_make_globals(api), test_make_globals(api));
+            assert!(check.is_ok());
+            api.decref(check.unwrap());
+            api.release_gil(gil);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_eval_with_globals_pyguard_drops_before_gil_release() {
+        // Regression: PyGuard must drop (decref) BEFORE release_gil.
+        // If this deadlocks or segfaults, the ordering is wrong.
+        with_ruby_python(|ruby, _api| {
+            for _ in 0..50 {
+                let hash = magnus::RHash::new();
+                hash.aset(ruby.sym_new("val"), 42_i64.into_value_with(ruby))
+                    .unwrap();
+                let result = crate::eval::rubyx_eval_with_globals(
+                    "val * 2".to_string(),
+                    hash,
+                );
+                assert!(result.is_ok());
+            }
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_context_eval_with_globals_releases_gil_on_error() {
+        with_ruby_python(|ruby, api| {
+            let ctx = crate::context::RubyxContext::new().expect("context should create");
+
+            let hash = magnus::RHash::new();
+            hash.aset(ruby.sym_new("x"), 1_i64.into_value_with(ruby))
+                .unwrap();
+
+            let result = ctx.eval_with_globals("x + missing".to_string(), hash);
+            assert!(result.is_err());
+
+            // Verify GIL is free
+            let gil = api.ensure_gil();
+            let check = api.run_string("5 + 5", EVAL_INPUT, test_make_globals(api), test_make_globals(api));
+            assert!(check.is_ok());
+            api.decref(check.unwrap());
+            api.release_gil(gil);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_context_await_with_globals_releases_gil_on_error() {
+        with_ruby_python(|ruby, api| {
+            let ctx = crate::context::RubyxContext::new().expect("context should create");
+
+            let hash = magnus::RHash::new();
+            hash.aset(ruby.sym_new("n"), 1_i64.into_value_with(ruby))
+                .unwrap();
+
+            let result = ctx.await_eval_with_globals("no_such_coro()".to_string(), hash);
+            assert!(result.is_err());
+
+            // Verify GIL is free
+            let gil = api.ensure_gil();
+            let check = api.run_string("6 + 6", EVAL_INPUT, test_make_globals(api), test_make_globals(api));
+            assert!(check.is_ok());
+            api.decref(check.unwrap());
+            api.release_gil(gil);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_context_async_await_with_globals_releases_gil_on_error() {
+        with_ruby_python(|ruby, api| {
+            let ctx = crate::context::RubyxContext::new().expect("context should create");
+
+            let hash = magnus::RHash::new();
+            hash.aset(ruby.sym_new("n"), 1_i64.into_value_with(ruby))
+                .unwrap();
+
+            let result = ctx.async_await_eval_with_globals("no_such_coro()".to_string(), hash);
+            assert!(result.is_err());
+
+            // Verify GIL is free
+            let gil = api.ensure_gil();
+            let check = api.run_string("7 + 7", EVAL_INPUT, test_make_globals(api), test_make_globals(api));
+            assert!(check.is_ok());
+            api.decref(check.unwrap());
+            api.release_gil(gil);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_eval_with_globals_error_maps_to_rubyx_class() {
+        // Regression: extract_exception was consumed on syntax check,
+        // then re-fetched (returning None) → fell back to RuntimeError.
+        with_ruby_python(|ruby, _api| {
+            let hash = magnus::RHash::new();
+            hash.aset(ruby.sym_new("d"), magnus::RHash::new().into_value_with(ruby))
+                .unwrap();
+
+            // Python KeyError should map to Rubyx::KeyError, not RuntimeError
+            let result = crate::eval::rubyx_eval_with_globals(
+                "d['missing']".to_string(),
+                hash,
+            );
+            assert!(result.is_err());
+            let err_msg = format!("{}", result.unwrap_err());
+            assert!(
+                err_msg.contains("KeyError"),
+                "Expected KeyError in message, got: {}",
+                err_msg
+            );
+        });
+    }
+
     // ========== error class mapping tests ==========
 
     #[test]
