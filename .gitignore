@@ -10,4 +10,3 @@ uv.lock
 .venv/
 .idea/
 __pycache__/
-examples/rails_demo

@@ -608,4 +608,109 @@ RSpec.describe 'RubyxObject', ruby_integration: true do
       expect(eval_result.to_ruby).to eq(stream_result)
     end
   end
+
+  # ========== Enumerable integration ==========
+
+  describe 'Enumerable' do
+    it 'supports map' do
+      py_list = Rubyx.eval('[1, 2, 3, 4, 5]')
+      result = py_list.map { |item| item.to_ruby * 2 }
+      expect(result).to eq([2, 4, 6, 8, 10])
+    end
+
+    it 'supports select' do
+      py_list = Rubyx.eval('[1, 2, 3, 4, 5, 6]')
+      result = py_list.select { |item| item.to_ruby.even? }
+      expect(result.map(&:to_ruby)).to eq([2, 4, 6])
+    end
+
+    it 'supports find' do
+      py_list = Rubyx.eval('[10, 20, 30, 40]')
+      result = py_list.find { |item| item.to_ruby > 25 }
+      expect(result.to_ruby).to eq(30)
+    end
+
+    it 'supports count' do
+      py_list = Rubyx.eval('[1, 2, 3, 4, 5]')
+      expect(py_list.count).to eq(5)
+    end
+
+    it 'supports to_a' do
+      py_list = Rubyx.eval('[10, 20, 30]')
+      arr = py_list.to_a
+      expect(arr.length).to eq(3)
+      expect(arr.map(&:to_ruby)).to eq([10, 20, 30])
+    end
+
+    it 'supports min_by / max_by' do
+      py_list = Rubyx.eval('[3, 1, 4, 1, 5, 9]')
+      min = py_list.min_by { |item| item.to_ruby }
+      max = py_list.max_by { |item| item.to_ruby }
+      expect(min.to_ruby).to eq(1)
+      expect(max.to_ruby).to eq(9)
+    end
+
+    it 'supports flat_map on nested list' do
+      py_list = Rubyx.eval('[[1, 2], [3, 4]]')
+      result = py_list.flat_map { |sub| sub.map(&:to_ruby) }
+      expect(result).to eq([1, 2, 3, 4])
+    end
+
+    it 'supports each_with_index' do
+      py_list = Rubyx.eval("['a', 'b', 'c']")
+      pairs = []
+      py_list.each_with_index { |item, i| pairs << [item.to_ruby, i] }
+      expect(pairs).to eq([['a', 0], ['b', 1], ['c', 2]])
+    end
+  end
+
+  # ========== #inspect vs #to_s ==========
+
+  describe '#inspect vs #to_s' do
+    it 'inspect shows repr for strings (with quotes)' do
+      obj = Rubyx.eval('"hello"')
+      expect(obj.to_s).to eq('hello')
+      expect(obj.inspect).to eq("'hello'")
+    end
+
+    it 'inspect and to_s are same for integers' do
+      obj = Rubyx.eval('42')
+      expect(obj.to_s).to eq('42')
+      expect(obj.inspect).to eq('42')
+    end
+
+    it 'inspect shows repr for lists' do
+      obj = Rubyx.eval('[1, 2, 3]')
+      expect(obj.inspect).to eq('[1, 2, 3]')
+      expect(obj.to_s).to eq('[1, 2, 3]')
+    end
+  end
+
+  # ========== method_missing with kwargs ==========
+
+  describe '#method_missing with keyword arguments' do
+    it 'passes keyword arguments to Python methods' do
+      ctx = Rubyx.context
+      ctx.eval(<<~PY)
+        class Greeter:
+            def greet(self, name, greeting="Hello"):
+                return f"{greeting}, {name}!"
+      PY
+      greeter = ctx.eval('Greeter()')
+      result = greeter.greet('Alice', greeting: 'Hi')
+      expect(result.to_ruby).to eq('Hi, Alice!')
+    end
+
+    it 'works without kwargs' do
+      ctx = Rubyx.context
+      ctx.eval(<<~PY)
+        class Adder:
+            def add(self, a, b):
+                return a + b
+      PY
+      adder = ctx.eval('Adder()')
+      result = adder.add(3, 4)
+      expect(result.to_ruby).to eq(7)
+    end
+  end
 end

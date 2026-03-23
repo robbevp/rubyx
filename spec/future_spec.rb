@@ -386,4 +386,38 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       expect { future.value }.to raise_error(StandardError, /division by zero|ZeroDivisionError/)
     end
   end
+
+  # ========== ArgumentError guards ==========
+
+  describe 'ArgumentError for coroutine + globals' do
+    it 'Rubyx.await raises ArgumentError when passing globals with coroutine object' do
+      ctx = Rubyx.context
+      ctx.eval("import asyncio\nasync def noop(): return 1")
+      coro = ctx.eval("noop()")
+      expect { Rubyx.await(coro, x: 1) }.to raise_error(ArgumentError, /cannot pass globals/)
+    end
+
+    it 'Rubyx.async_await raises ArgumentError when passing globals with coroutine object' do
+      ctx = Rubyx.context
+      ctx.eval("import asyncio\nasync def noop(): return 1")
+      coro = ctx.eval("noop()")
+      expect { Rubyx.async_await(coro, x: 1) }.to raise_error(ArgumentError, /cannot pass globals/)
+    end
+
+    it 'Rubyx.await works with coroutine object (no globals)' do
+      ctx = Rubyx.context
+      ctx.eval("import asyncio\nasync def get99(): return 99")
+      coro = ctx.eval("get99()")
+      result = Rubyx.await(coro)
+      expect(result.to_ruby).to eq(99)
+    end
+
+    it 'Rubyx.async_await works with coroutine object (no globals)' do
+      ctx = Rubyx.context
+      ctx.eval("import asyncio\nasync def get77(): return 77")
+      coro = ctx.eval("get77()")
+      future = Rubyx.async_await(coro)
+      expect(future.value).to eq(77)
+    end
+  end
 end

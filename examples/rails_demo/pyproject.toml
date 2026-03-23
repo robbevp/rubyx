@@ -1,0 +1,16 @@
+[project]
+name = "my-rails-app"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "yt-dlp",
+]
+
+[project.optional-dependencies]
+ai = [
+    "torch",
+    "transformers",
+    "accelerate",
+    "glmocr[selfhosted]",
+    "pymupdf",
+]
