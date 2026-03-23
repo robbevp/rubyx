@@ -63,8 +63,7 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
         "_await_with_globals",
         function!(crate::eval::rubyx_await_with_globals, 2),
     )?;
-    rubyx_module
-        .define_singleton_method("_async_await", function!(rubyx_async_await, 1))?;
+    rubyx_module.define_singleton_method("_async_await", function!(rubyx_async_await, 1))?;
     rubyx_module.define_singleton_method(
         "_async_await_with_globals",
         function!(crate::eval::rubyx_async_await_with_globals, 2),
@@ -132,7 +131,10 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
         "_eval_with_globals",
         method!(crate::context::RubyxContext::eval_with_globals, 2),
     )?;
-    context_class.define_method("_await", method!(crate::context::RubyxContext::await_eval, 1))?;
+    context_class.define_method(
+        "_await",
+        method!(crate::context::RubyxContext::await_eval, 1),
+    )?;
     context_class.define_method(
         "_await_with_globals",
         method!(crate::context::RubyxContext::await_eval_with_globals, 2),
@@ -143,7 +145,10 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
     )?;
     context_class.define_method(
         "_async_await_with_globals",
-        method!(crate::context::RubyxContext::async_await_eval_with_globals, 2),
+        method!(
+            crate::context::RubyxContext::async_await_eval_with_globals,
+            2
+        ),
     )?;
     rubyx_module
         .define_singleton_method("context", function!(crate::context::RubyxContext::new, 0))?;
@@ -3271,8 +3276,8 @@ mod tests {
             api.decref(py_x);
             api.decref(py_y);
 
-            let result = crate::eval::eval_with_globals("x + y", globals, api)
-                .expect("eval should succeed");
+            let result =
+                crate::eval::eval_with_globals("x + y", globals, api).expect("eval should succeed");
             let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
             assert_eq!(api.long_to_i64(obj.as_ptr()), 30);
 
@@ -3286,17 +3291,15 @@ mod tests {
         with_ruby_python(|ruby, api| {
             let globals = make_globals(api);
 
-            let py_name =
-                crate::rubyx_object::ruby_to_python("Alice".into_value_with(ruby), api)
-                    .expect("should convert name");
+            let py_name = crate::rubyx_object::ruby_to_python("Alice".into_value_with(ruby), api)
+                .expect("should convert name");
             let key = api.string_from_str("name");
             api.dict_set_item(globals, key, py_name);
             api.decref(key);
             api.decref(py_name);
 
-            let result =
-                crate::eval::eval_with_globals("f'Hello, {name}!'", globals, api)
-                    .expect("eval should succeed");
+            let result = crate::eval::eval_with_globals("f'Hello, {name}!'", globals, api)
+                .expect("eval should succeed");
             let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
             assert_eq!(
                 api.string_to_string(obj.as_ptr()),
@@ -3351,9 +3354,8 @@ mod tests {
             api.decref(key);
             api.decref(py_dict);
 
-            let result =
-                crate::eval::eval_with_globals("data['a'] + data['b']", globals, api)
-                    .expect("eval should succeed");
+            let result = crate::eval::eval_with_globals("data['a'] + data['b']", globals, api)
+                .expect("eval should succeed");
             let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
             assert_eq!(api.long_to_i64(obj.as_ptr()), 300);
 
@@ -3451,17 +3453,15 @@ mod tests {
             )
             .expect("should define async function");
 
-            let py_who =
-                crate::rubyx_object::ruby_to_python("world".into_value_with(ruby), api)
-                    .expect("should convert who");
+            let py_who = crate::rubyx_object::ruby_to_python("world".into_value_with(ruby), api)
+                .expect("should convert who");
             let key = api.string_from_str("who");
             api.dict_set_item(globals, key, py_who);
             api.decref(key);
             api.decref(py_who);
 
-            let result =
-                crate::eval::await_eval_with_globals("greet(who)", globals, api)
-                    .expect("await should succeed");
+            let result = crate::eval::await_eval_with_globals("greet(who)", globals, api)
+                .expect("await should succeed");
             let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
             assert_eq!(
                 api.string_to_string(obj.as_ptr()),
@@ -3486,9 +3486,8 @@ mod tests {
             )
             .expect("should define async function");
 
-            let py_val =
-                crate::rubyx_object::ruby_to_python((-1_i64).into_value_with(ruby), api)
-                    .expect("should convert val");
+            let py_val = crate::rubyx_object::ruby_to_python((-1_i64).into_value_with(ruby), api)
+                .expect("should convert val");
             let key = api.string_from_str("val");
             api.dict_set_item(globals, key, py_val);
             api.decref(key);
@@ -3651,15 +3650,18 @@ mod tests {
                 .unwrap();
 
             // This should fail (NameError: 'undefined_var') but NOT leak the GIL
-            let result = crate::eval::rubyx_eval_with_globals(
-                "x + undefined_var".to_string(),
-                hash,
-            );
+            let result =
+                crate::eval::rubyx_eval_with_globals("x + undefined_var".to_string(), hash);
             assert!(result.is_err(), "should fail for undefined variable");
 
             // Prove GIL is released: we can acquire it again without deadlocking
             let gil = api.ensure_gil();
-            let check = api.run_string("1 + 1", EVAL_INPUT, test_make_globals(api), test_make_globals(api));
+            let check = api.run_string(
+                "1 + 1",
+                EVAL_INPUT,
+                test_make_globals(api),
+                test_make_globals(api),
+            );
             assert!(check.is_ok());
             api.decref(check.unwrap());
             api.release_gil(gil);
@@ -3674,15 +3676,17 @@ mod tests {
             hash.aset(ruby.sym_new("x"), 1_i64.into_value_with(ruby))
                 .unwrap();
 
-            let result = crate::eval::rubyx_eval_with_globals(
-                "def".to_string(),
-                hash,
-            );
+            let result = crate::eval::rubyx_eval_with_globals("def".to_string(), hash);
             assert!(result.is_err(), "should fail on syntax error");
 
             // GIL should be released — acquire again to verify
             let gil = api.ensure_gil();
-            let check = api.run_string("2 + 2", EVAL_INPUT, test_make_globals(api), test_make_globals(api));
+            let check = api.run_string(
+                "2 + 2",
+                EVAL_INPUT,
+                test_make_globals(api),
+                test_make_globals(api),
+            );
             assert!(check.is_ok());
             api.decref(check.unwrap());
             api.release_gil(gil);
@@ -3698,15 +3702,18 @@ mod tests {
                 .unwrap();
 
             // Invalid code — should error but release GIL
-            let result = crate::eval::rubyx_await_with_globals(
-                "undefined_coroutine()".to_string(),
-                hash,
-            );
+            let result =
+                crate::eval::rubyx_await_with_globals("undefined_coroutine()".to_string(), hash);
             assert!(result.is_err());
 
             // Verify GIL is free
             let gil = api.ensure_gil();
-            let check = api.run_string("3 + 3", EVAL_INPUT, test_make_globals(api), test_make_globals(api));
+            let check = api.run_string(
+                "3 + 3",
+                EVAL_INPUT,
+                test_make_globals(api),
+                test_make_globals(api),
+            );
             assert!(check.is_ok());
             api.decref(check.unwrap());
             api.release_gil(gil);
@@ -3722,15 +3729,18 @@ mod tests {
                 .unwrap();
 
             // Invalid code — should error but release GIL
-            let result = crate::eval::rubyx_async_await_with_globals(
-                "undefined_async()".to_string(),
-                hash,
-            );
+            let result =
+                crate::eval::rubyx_async_await_with_globals("undefined_async()".to_string(), hash);
             assert!(result.is_err());
 
             // Verify GIL is free
             let gil = api.ensure_gil();
-            let check = api.run_string("4 + 4", EVAL_INPUT, test_make_globals(api), test_make_globals(api));
+            let check = api.run_string(
+                "4 + 4",
+                EVAL_INPUT,
+                test_make_globals(api),
+                test_make_globals(api),
+            );
             assert!(check.is_ok());
             api.decref(check.unwrap());
             api.release_gil(gil);
@@ -3747,10 +3757,7 @@ mod tests {
                 let hash = magnus::RHash::new();
                 hash.aset(ruby.sym_new("val"), 42_i64.into_value_with(ruby))
                     .unwrap();
-                let result = crate::eval::rubyx_eval_with_globals(
-                    "val * 2".to_string(),
-                    hash,
-                );
+                let result = crate::eval::rubyx_eval_with_globals("val * 2".to_string(), hash);
                 assert!(result.is_ok());
             }
         });
@@ -3771,7 +3778,12 @@ mod tests {
 
             // Verify GIL is free
             let gil = api.ensure_gil();
-            let check = api.run_string("5 + 5", EVAL_INPUT, test_make_globals(api), test_make_globals(api));
+            let check = api.run_string(
+                "5 + 5",
+                EVAL_INPUT,
+                test_make_globals(api),
+                test_make_globals(api),
+            );
             assert!(check.is_ok());
             api.decref(check.unwrap());
             api.release_gil(gil);
@@ -3793,7 +3805,12 @@ mod tests {
 
             // Verify GIL is free
             let gil = api.ensure_gil();
-            let check = api.run_string("6 + 6", EVAL_INPUT, test_make_globals(api), test_make_globals(api));
+            let check = api.run_string(
+                "6 + 6",
+                EVAL_INPUT,
+                test_make_globals(api),
+                test_make_globals(api),
+            );
             assert!(check.is_ok());
             api.decref(check.unwrap());
             api.release_gil(gil);
@@ -3815,7 +3832,12 @@ mod tests {
 
             // Verify GIL is free
             let gil = api.ensure_gil();
-            let check = api.run_string("7 + 7", EVAL_INPUT, test_make_globals(api), test_make_globals(api));
+            let check = api.run_string(
+                "7 + 7",
+                EVAL_INPUT,
+                test_make_globals(api),
+                test_make_globals(api),
+            );
             assert!(check.is_ok());
             api.decref(check.unwrap());
             api.release_gil(gil);
@@ -3829,14 +3851,14 @@ mod tests {
         // then re-fetched (returning None) → fell back to RuntimeError.
         with_ruby_python(|ruby, _api| {
             let hash = magnus::RHash::new();
-            hash.aset(ruby.sym_new("d"), magnus::RHash::new().into_value_with(ruby))
-                .unwrap();
+            hash.aset(
+                ruby.sym_new("d"),
+                magnus::RHash::new().into_value_with(ruby),
+            )
+            .unwrap();
 
             // Python KeyError should map to Rubyx::KeyError, not RuntimeError
-            let result = crate::eval::rubyx_eval_with_globals(
-                "d['missing']".to_string(),
-                hash,
-            );
+            let result = crate::eval::rubyx_eval_with_globals("d['missing']".to_string(), hash);
             assert!(result.is_err());
             let err_msg = format!("{}", result.unwrap_err());
             assert!(
@@ -3993,9 +4015,8 @@ mod tests {
 
             // Verify mapped types resolve to Rubyx:: classes, not RuntimeError
             use magnus::Class;
-            let class_name = |c: magnus::ExceptionClass| -> String {
-                unsafe { c.name().to_string() }
-            };
+            let class_name =
+                |c: magnus::ExceptionClass| -> String { unsafe { c.name().to_string() } };
 
             assert_eq!(class_name(key_err), "Rubyx::KeyError");
             assert_eq!(class_name(idx_err), "Rubyx::IndexError");

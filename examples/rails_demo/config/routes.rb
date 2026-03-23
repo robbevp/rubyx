@@ -40,15 +40,13 @@ Rails.application.routes.draw do
     post "context_with_globals", to: "demo#context_with_globals"
   end
 
-  # Part 2 — Real Python libraries
+  # Part 2 — Real Python libraries (models loaded at boot via initializer)
   scope :llm do
-    post "load", to: "llm#load"
     post "generate", to: "llm#generate"
     get "stream", to: "llm#stream"
   end
 
   scope :ocr do
-    post "load", to: "ocr#load"
     get "parse", to: "ocr#parse"
     get "markdown", to: "ocr#markdown"
     get "json_result", to: "ocr#json_result"

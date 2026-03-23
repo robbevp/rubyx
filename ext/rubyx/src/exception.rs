@@ -52,9 +52,10 @@ impl PythonException {
 impl From<PythonException> for magnus::Error {
     fn from(e: PythonException) -> Self {
         let (class, msg) = match &e {
-            PythonException::Exception { kind, .. } => {
-                (crate::ruby_helpers::rubyx_exception_class(kind), e.to_magnus_message())
-            }
+            PythonException::Exception { kind, .. } => (
+                crate::ruby_helpers::rubyx_exception_class(kind),
+                e.to_magnus_message(),
+            ),
             PythonException::SyntaxError { .. } => {
                 (crate::ruby_helpers::syntax_error(), e.to_magnus_message())
             }

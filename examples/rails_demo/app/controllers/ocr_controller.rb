@@ -1,24 +1,11 @@
 # frozen_string_literal: true
 
 # Document OCR via GLM-OCR (self-hosted with Ollama).
-#
-# Setup:
-#   1. uv sync --extra ai
-#   2. ollama pull glm-ocr
-#   3. rails s
+# Model is loaded once at boot in config/initializers/rubyx.rb
 class OcrController < ApplicationController
   include ActionController::Live
 
   DOCS_DIR = Rails.root.join('app/python/docs')
-
-  # POST /ocr/load?device=cpu
-  def load
-    ocr = Rubyx.import('services.ocr')
-    config_path = Rails.root.join('config/glmocr.yaml').to_s
-    device = params[:device] || "cpu"
-    result = ocr.load(config_path, device)
-    render json: { status: result.to_ruby }
-  end
 
   # GET /ocr/parse?file=Statement_of_Accounts_2024_2025_AF.pdf
   def parse

@@ -255,7 +255,10 @@ fn run_asyncio(coroutine: *mut PyObject, api: &'static PythonApi) -> Result<Valu
     if args.is_null() {
         api.decref(run_fn);
         api.decref(asyncio);
-        return Err(Error::new(runtime_error(), "Failed to allocate argument tuple"));
+        return Err(Error::new(
+            runtime_error(),
+            "Failed to allocate argument tuple",
+        ));
     }
     api.incref(coroutine);
     unsafe { (api.py_tuple_set_item)(args, 0, coroutine) };
@@ -348,26 +351,24 @@ pub(crate) fn rubyx_async_await_with_globals(
     let globals = make_globals(api);
     let result = match inject_globals(&globals, globals_hash, api) {
         Err(e) => Err(e),
-        Ok(()) => {
-            match api.run_string(&code, PY_EVAL_INPUT, globals.ptr(), globals.ptr()) {
-                Ok(obj) if !obj.is_null() => {
-                    let future = crate::future::RubyxFuture::from_coroutine(obj, api);
-                    api.decref(obj);
-                    Ok(future)
-                }
-                Ok(_) => {
-                    let err = if api.has_error() {
-                        PythonApi::extract_exception(api)
-                            .map(Error::from)
-                            .unwrap_or_else(|| Error::new(runtime_error(), "Python eval failed"))
-                    } else {
-                        Error::new(runtime_error(), "Python eval returned null")
-                    };
-                    Err(err)
-                }
-                Err(e) => Err(Error::new(runtime_error(), e)),
+        Ok(()) => match api.run_string(&code, PY_EVAL_INPUT, globals.ptr(), globals.ptr()) {
+            Ok(obj) if !obj.is_null() => {
+                let future = crate::future::RubyxFuture::from_coroutine(obj, api);
+                api.decref(obj);
+                Ok(future)
             }
-        }
+            Ok(_) => {
+                let err = if api.has_error() {
+                    PythonApi::extract_exception(api)
+                        .map(Error::from)
+                        .unwrap_or_else(|| Error::new(runtime_error(), "Python eval failed"))
+                } else {
+                    Error::new(runtime_error(), "Python eval returned null")
+                };
+                Err(err)
+            }
+            Err(e) => Err(Error::new(runtime_error(), e)),
+        },
     };
     drop(globals);
 

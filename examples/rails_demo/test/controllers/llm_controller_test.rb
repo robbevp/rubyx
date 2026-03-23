@@ -3,26 +3,15 @@
 require "test_helper"
 
 class LlmControllerTest < ActionDispatch::IntegrationTest
-  # Requires: uv sync --extra ai
-
-  # ===========================================================================
-  # Model loading
-  # ===========================================================================
-
-  test "load returns success" do
-    post "/llm/load"
-    assert_response :success
-
-    json = JSON.parse(response.body)
-    assert json["status"].include?("Loaded")
-  end
-
-  test "load accepts custom model and device" do
-    post "/llm/load", params: { model: "Qwen/Qwen2.5-0.5B-Instruct", device: "cpu" }
-    assert_response :success
-
-    json = JSON.parse(response.body)
-    assert json["status"].include?("Qwen")
+  # Models are loaded at boot in production/development.
+  # In test env, we load once before all tests.
+  @@llm_loaded = false
+  setup do
+    unless @@llm_loaded
+      llm = Rubyx.import('services.llm')
+      llm.load_model("Qwen/Qwen2.5-0.5B-Instruct")
+      @@llm_loaded = true
+    end
   end
 
   # ===========================================================================
@@ -30,7 +19,6 @@ class LlmControllerTest < ActionDispatch::IntegrationTest
   # ===========================================================================
 
   test "generate returns a response" do
-    post "/llm/load"
     post "/llm/generate",
       params: { prompt: "What is 1+1?", max_tokens: 20 }.to_json,
       headers: { "Content-Type" => "application/json" }
@@ -43,7 +31,6 @@ class LlmControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "generate uses defaults" do
-    post "/llm/load"
     post "/llm/generate"
     assert_response :success
 
@@ -56,7 +43,6 @@ class LlmControllerTest < ActionDispatch::IntegrationTest
   # ===========================================================================
 
   test "stream returns SSE content type" do
-    post "/llm/load"
     get "/llm/stream", params: { prompt: "Say hi", max_tokens: 10 }
     assert_response :success
     assert_match %r{text/event-stream}, response.content_type

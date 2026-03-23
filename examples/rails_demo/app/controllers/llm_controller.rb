@@ -1,19 +1,9 @@
 # frozen_string_literal: true
 
 # LLM text generation via Hugging Face Transformers.
-# Requires: uv sync --extra ml
+# Model is loaded once at boot in config/initializers/rubyx.rb
 class LlmController < ApplicationController
   include ActionController::Live
-
-  # POST /llm/load?model=Qwen/Qwen2.5-0.5B-Instruct&device=cpu
-  def load
-    llm = Rubyx.import('services.llm')
-    model_name = params[:model] || "Qwen/Qwen2.5-0.5B-Instruct"
-    device = params[:device] || "cpu"
-
-    result = llm.load_model(model_name, device)
-    render json: { status: result.to_ruby }
-  end
 
   # POST /llm/generate  body: { "prompt": "What is Ruby?", "max_tokens": 100 }
   def generate

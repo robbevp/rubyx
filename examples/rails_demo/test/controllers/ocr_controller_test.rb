@@ -3,11 +3,19 @@
 require "test_helper"
 
 class OcrControllerTest < ActionDispatch::IntegrationTest
-  # Requires:
-  #   1. uv sync --extra ai
-  #   2. ollama pull glm-ocr
+  # Models are loaded at boot in production/development.
+  # In test env, we load once before all tests.
 
   DOCS_DIR = Rails.root.join("app/python/docs")
+
+  @@ocr_loaded = false
+  setup do
+    unless @@ocr_loaded
+      ocr = Rubyx.import('services.ocr')
+      ocr.load(Rails.root.join('config/glmocr.yaml').to_s)
+      @@ocr_loaded = true
+    end
+  end
 
   # ===========================================================================
   # File listing (no model needed)
@@ -51,66 +59,17 @@ class OcrControllerTest < ActionDispatch::IntegrationTest
     assert_response :not_found
   end
 
-  # ===========================================================================
-  # Model loading (requires vLLM server running)
-  # ===========================================================================
-
-  test "load connects to Ollama" do
-    post "/ocr/load", params: { device: "cpu" }
-    assert_response :success
-
-    json = JSON.parse(response.body)
-    assert json["status"].include?("GLM-OCR")
-    assert json["status"].include?("Ollama")
+  test "stream_pages returns 404 for missing file" do
+    get "/ocr/stream_pages", params: { file: "nonexistent.pdf" }
+    assert_response :not_found
   end
 
   # ===========================================================================
-  # Document parsing (requires vLLM server running)
-  # ===========================================================================
-
-  test "parse returns markdown and json for PDF" do
-    post "/ocr/load"
-    pdf = "test.pdf"
-
-    get "/ocr/parse", params: { file: pdf }
-    assert_response :success
-
-    json = JSON.parse(response.body)
-    assert json["markdown"].is_a?(String)
-    assert json["markdown"].length > 0
-  end
-
-  test "markdown returns text for PDF" do
-    post "/ocr/load"
-    pdf = "test.pdf"
-
-    get "/ocr/markdown", params: { file: pdf }
-    assert_response :success
-
-    json = JSON.parse(response.body)
-    assert json["markdown"].is_a?(String)
-    assert_equal pdf, json["file"]
-  end
-
-  test "json_result returns structured data" do
-    post "/ocr/load"
-    pdf = "test.pdf"
-
-    get "/ocr/json_result", params: { file: pdf }
-    assert_response :success
-
-    json = JSON.parse(response.body)
-    assert json["result"].is_a?(Array)
-  end
-
-  # ===========================================================================
-  # PDF info (uses PyMuPDF, no vLLM needed)
+  # PDF info (uses PyMuPDF, no OCR model needed)
   # ===========================================================================
 
   test "info returns page count and metadata" do
-    pdf = "test.pdf"
-
-    get "/ocr/info", params: { file: pdf }
+    get "/ocr/info", params: { file: "test.pdf" }
     assert_response :success
 
     json = JSON.parse(response.body)
@@ -120,22 +79,44 @@ class OcrControllerTest < ActionDispatch::IntegrationTest
   end
 
   # ===========================================================================
-  # Streaming (requires vLLM server running)
+  # Document parsing (requires Ollama + glm-ocr)
+  # ===========================================================================
+
+  test "parse returns markdown and json for PDF" do
+    get "/ocr/parse", params: { file: "test.pdf" }
+    assert_response :success
+
+    json = JSON.parse(response.body)
+    assert json["markdown"].is_a?(String)
+    assert json["markdown"].length > 0
+  end
+
+  test "markdown returns text for PDF" do
+    get "/ocr/markdown", params: { file: "test.pdf" }
+    assert_response :success
+
+    json = JSON.parse(response.body)
+    assert json["markdown"].is_a?(String)
+    assert_equal "test.pdf", json["file"]
+  end
+
+  test "json_result returns structured data" do
+    get "/ocr/json_result", params: { file: "test.pdf" }
+    assert_response :success
+
+    json = JSON.parse(response.body)
+    assert json["result"].is_a?(Array)
+  end
+
+  # ===========================================================================
+  # Streaming
   # ===========================================================================
 
   test "stream_pages returns SSE with page data" do
-    post "/ocr/load"
-    pdf = "test.pdf"
-
-    get "/ocr/stream_pages", params: { file: pdf }
+    get "/ocr/stream_pages", params: { file: "test.pdf" }
     assert_response :success
     assert_match %r{text/event-stream}, response.content_type
     assert response.body.include?("data: ")
     assert response.body.include?("[DONE]")
-  end
-
-  test "stream_pages returns 404 for missing file" do
-    get "/ocr/stream_pages", params: { file: "nonexistent.pdf" }
-    assert_response :not_found
   end
 end

@@ -601,10 +601,9 @@ mod tests {
                 .eval_with_globals("a * b".to_string(), hash)
                 .expect("eval should succeed");
 
-            let obj = magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(
-                result,
-            )
-            .expect("should be RubyxObject");
+            let obj =
+                magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(result)
+                    .expect("should be RubyxObject");
             assert_eq!(api.long_to_i64(obj.as_ptr()), 35);
         });
     }
@@ -629,10 +628,9 @@ mod tests {
             let result = ctx
                 .eval("x + y".to_string())
                 .expect("should access persisted globals");
-            let obj = magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(
-                result,
-            )
-            .expect("should be RubyxObject");
+            let obj =
+                magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(result)
+                    .expect("should be RubyxObject");
             assert_eq!(api.long_to_i64(obj.as_ptr()), 201); // 100 + 101
         });
     }
@@ -646,25 +644,18 @@ mod tests {
             let ctx = super::RubyxContext::new().expect("context should create");
 
             let hash = magnus::RHash::new();
-            hash.aset(
-                ruby.sym_new("greeting"),
-                "hello".into_value_with(ruby),
-            )
-            .unwrap();
-            hash.aset(
-                ruby.sym_new("name"),
-                "world".into_value_with(ruby),
-            )
-            .unwrap();
+            hash.aset(ruby.sym_new("greeting"), "hello".into_value_with(ruby))
+                .unwrap();
+            hash.aset(ruby.sym_new("name"), "world".into_value_with(ruby))
+                .unwrap();
 
             let result = ctx
                 .eval_with_globals("f'{greeting}, {name}!'".to_string(), hash)
                 .expect("eval should succeed");
 
-            let obj = magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(
-                result,
-            )
-            .expect("should be RubyxObject");
+            let obj =
+                magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(result)
+                    .expect("should be RubyxObject");
             assert_eq!(
                 api.string_to_string(obj.as_ptr()),
                 Some("hello, world!".to_string())
@@ -686,20 +677,16 @@ mod tests {
             arr.push(3_i64.into_value_with(ruby)).unwrap();
 
             let hash = magnus::RHash::new();
-            hash.aset(
-                ruby.sym_new("items"),
-                arr.into_value_with(ruby),
-            )
-            .unwrap();
+            hash.aset(ruby.sym_new("items"), arr.into_value_with(ruby))
+                .unwrap();
 
             let result = ctx
                 .eval_with_globals("sum(items)".to_string(), hash)
                 .expect("eval should succeed");
 
-            let obj = magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(
-                result,
-            )
-            .expect("should be RubyxObject");
+            let obj =
+                magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(result)
+                    .expect("should be RubyxObject");
             assert_eq!(api.long_to_i64(obj.as_ptr()), 6);
         });
     }
@@ -726,10 +713,9 @@ mod tests {
                 .await_eval_with_globals("multiply(a, b)".to_string(), hash)
                 .expect("await should succeed");
 
-            let obj = magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(
-                result,
-            )
-            .expect("should be RubyxObject");
+            let obj =
+                magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(result)
+                    .expect("should be RubyxObject");
             assert_eq!(api.long_to_i64(obj.as_ptr()), 42);
         });
     }
@@ -806,9 +792,8 @@ mod tests {
             let r1 = ctx
                 .eval_with_globals("x".to_string(), hash1)
                 .expect("eval should succeed");
-            let obj1 =
-                magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(r1)
-                    .unwrap();
+            let obj1 = magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(r1)
+                .unwrap();
             assert_eq!(api.long_to_i64(obj1.as_ptr()), 10);
 
             // Override x=99
@@ -819,9 +804,8 @@ mod tests {
             let r2 = ctx
                 .eval_with_globals("x".to_string(), hash2)
                 .expect("eval should succeed");
-            let obj2 =
-                magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(r2)
-                    .unwrap();
+            let obj2 = magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(r2)
+                .unwrap();
             assert_eq!(api.long_to_i64(obj2.as_ptr()), 99);
         });
     }

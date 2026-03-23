@@ -280,9 +280,8 @@ pub fn ruby_value_to_python(
     val: magnus::Value,
     api: &PythonApi,
 ) -> Result<*mut PyObject, ConvertError> {
-    crate::rubyx_object::ruby_to_python(val, api).map_err(|e| {
-        ConvertError::PythonError(e.to_string())
-    })
+    crate::rubyx_object::ruby_to_python(val, api)
+        .map_err(|e| ConvertError::PythonError(e.to_string()))
 }
 
 #[cfg(test)]
