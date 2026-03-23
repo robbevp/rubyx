@@ -2,9 +2,10 @@ use crate::python_api::PythonApi;
 use crate::python_ffi::PyObject;
 use crate::python_guard::PyGuard;
 use crate::ruby_helpers::runtime_error;
-use crate::rubyx_object::RubyxObject;
+use crate::rubyx_object::{ruby_to_python, RubyxObject};
+use magnus::r_hash::ForEach;
 use magnus::typed_data::Obj;
-use magnus::{Error, IntoValue, Ruby, TryConvert, Value};
+use magnus::{Error, IntoValue, RHash, Ruby, TryConvert, Value};
 
 /// Py_eval_input = 258 (for expressions)
 const PY_EVAL_INPUT: i64 = 258;
@@ -200,6 +201,39 @@ pub(crate) fn rubyx_eval(code: String) -> Result<Value, magnus::Error> {
     api.release_gil(gil);
     result
 }
+pub(crate) fn rubyx_eval_with_globals(
+    code: String,
+    globals_hash: RHash,
+) -> Result<Value, magnus::Error> {
+    let api = crate::api();
+    let gil = api.ensure_gil();
+
+    let globals = make_globals(api);
+    let result = match inject_globals(&globals, globals_hash, api) {
+        Ok(()) => eval_with_globals(&code, globals.ptr(), api),
+        Err(e) => Err(e),
+    };
+    drop(globals); // decref while GIL is held
+
+    api.release_gil(gil);
+    result
+}
+
+fn inject_globals(
+    globals: &PyGuard<'_>,
+    globals_hash: RHash,
+    api: &'static PythonApi,
+) -> Result<(), magnus::Error> {
+    globals_hash.foreach(|key: Value, val: Value| {
+        let py_key = ruby_to_python(key, api)?;
+        let py_val = ruby_to_python(val, api)?;
+        api.dict_set_item(globals.ptr(), py_key, py_val);
+        api.decref(py_key);
+        api.decref(py_val);
+        Ok(ForEach::Continue)
+    })?;
+    Ok(())
+}
 
 /// Run a Python coroutine with asyncio.run() and return the result.
 /// The coroutine must already be a PyObject (not code string).
@@ -279,5 +313,60 @@ pub(crate) fn await_eval_with_globals(
 
     let result = run_asyncio(py_coroutine, api);
     api.decref(py_coroutine);
+    result
+}
+
+pub(crate) fn rubyx_await_with_globals(
+    code: String,
+    globals_hash: RHash,
+) -> Result<Value, magnus::Error> {
+    let api = crate::api();
+    let gil = api.ensure_gil();
+
+    let globals = make_globals(api);
+    let result = match inject_globals(&globals, globals_hash, api) {
+        Ok(()) => await_eval_with_globals(&code, globals.ptr(), api),
+        Err(e) => Err(e),
+    };
+    drop(globals);
+
+    api.release_gil(gil);
+    result
+}
+
+pub(crate) fn rubyx_async_await_with_globals(
+    code: String,
+    globals_hash: RHash,
+) -> Result<crate::future::RubyxFuture, magnus::Error> {
+    let api = crate::api();
+    let gil = api.ensure_gil();
+
+    let globals = make_globals(api);
+    let result = match inject_globals(&globals, globals_hash, api) {
+        Err(e) => Err(e),
+        Ok(()) => {
+            match api.run_string(&code, PY_EVAL_INPUT, globals.ptr(), globals.ptr()) {
+                Ok(obj) if !obj.is_null() => {
+                    let future = crate::future::RubyxFuture::from_coroutine(obj, api);
+                    api.decref(obj);
+                    Ok(future)
+                }
+                Ok(_) => {
+                    let err = if api.has_error() {
+                        PythonApi::extract_exception(api)
+                            .map(Error::from)
+                            .unwrap_or_else(|| Error::new(runtime_error(), "Python eval failed"))
+                    } else {
+                        Error::new(runtime_error(), "Python eval returned null")
+                    };
+                    Err(err)
+                }
+                Err(e) => Err(Error::new(runtime_error(), e)),
+            }
+        }
+    };
+    drop(globals);
+
+    api.release_gil(gil);
     result
 }

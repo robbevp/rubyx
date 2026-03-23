@@ -53,8 +53,21 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
     // Module Class Methods
     rubyx_module.define_singleton_method("_import", function!(crate::import::rubyx_import, 1))?;
     rubyx_module.define_singleton_method("_eval", function!(crate::eval::rubyx_eval, 1))?;
-    rubyx_module.define_singleton_method("await", function!(crate::eval::rubyx_await, 1))?;
-    rubyx_module.define_singleton_method("async_await", function!(rubyx_async_await, 1))?;
+    rubyx_module.define_singleton_method(
+        "_eval_with_globals",
+        function!(crate::eval::rubyx_eval_with_globals, 2),
+    )?;
+    rubyx_module.define_singleton_method("_await", function!(crate::eval::rubyx_await, 1))?;
+    rubyx_module.define_singleton_method(
+        "_await_with_globals",
+        function!(crate::eval::rubyx_await_with_globals, 2),
+    )?;
+    rubyx_module
+        .define_singleton_method("_async_await", function!(rubyx_async_await, 1))?;
+    rubyx_module.define_singleton_method(
+        "_async_await_with_globals",
+        function!(crate::eval::rubyx_async_await_with_globals, 2),
+    )?;
 
     // RubyxObject class for wrapped Python objects
     let py_object = ruby.define_class("RubyxObject", ruby.class_object())?;
@@ -113,14 +126,23 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
     let context_class = rubyx_module.define_class("Context", ruby.class_object())?;
     context_class
         .define_singleton_method("new", function!(crate::context::RubyxContext::new, 0))?;
-    context_class.define_method("eval", method!(crate::context::RubyxContext::eval, 1))?;
+    context_class.define_method("_eval", method!(crate::context::RubyxContext::eval, 1))?;
     context_class.define_method(
-        "await",
-        method!(crate::context::RubyxContext::await_eval, 1),
+        "_eval_with_globals",
+        method!(crate::context::RubyxContext::eval_with_globals, 2),
+    )?;
+    context_class.define_method("_await", method!(crate::context::RubyxContext::await_eval, 1))?;
+    context_class.define_method(
+        "_await_with_globals",
+        method!(crate::context::RubyxContext::await_eval_with_globals, 2),
     )?;
     context_class.define_method(
-        "async_await",
+        "_async_await",
         method!(crate::context::RubyxContext::async_await_eval, 1),
+    )?;
+    context_class.define_method(
+        "_async_await_with_globals",
+        method!(crate::context::RubyxContext::async_await_eval_with_globals, 2),
     )?;
     rubyx_module
         .define_singleton_method("context", function!(crate::context::RubyxContext::new, 0))?;
@@ -458,6 +480,8 @@ fn create_async_stream_from_iterable(iterable: Value) -> Result<RubyxStream, mag
 mod tests {
     use crate::rubyx_object::RubyxObject;
     use crate::test_helpers::{skip_if_no_python, with_ruby_python};
+    use magnus::typed_data::Obj;
+    use magnus::value::ReprValue;
     use magnus::{IntoValue, TryConvert};
     use serial_test::serial;
 
@@ -3206,6 +3230,395 @@ mod tests {
             let result = crate::eval::await_eval_with_globals("fail()", globals, api);
             assert!(result.is_err(), "should propagate error");
 
+            api.decref(globals);
+        });
+    }
+
+    // ========== eval_with_globals tests ==========
+
+    #[test]
+    #[serial]
+    fn test_eval_with_globals_simple_addition() {
+        with_ruby_python(|ruby, api| {
+            let globals = make_globals(api);
+
+            // Inject x=10 and y=20 into globals
+            let py_x = crate::rubyx_object::ruby_to_python(10_i64.into_value_with(ruby), api)
+                .expect("should convert x");
+            let py_y = crate::rubyx_object::ruby_to_python(20_i64.into_value_with(ruby), api)
+                .expect("should convert y");
+            let key_x = api.string_from_str("x");
+            let key_y = api.string_from_str("y");
+            api.dict_set_item(globals, key_x, py_x);
+            api.dict_set_item(globals, key_y, py_y);
+            api.decref(key_x);
+            api.decref(key_y);
+            api.decref(py_x);
+            api.decref(py_y);
+
+            let result = crate::eval::eval_with_globals("x + y", globals, api)
+                .expect("eval should succeed");
+            let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
+            assert_eq!(api.long_to_i64(obj.as_ptr()), 30);
+
+            api.decref(globals);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_eval_with_globals_string_interpolation() {
+        with_ruby_python(|ruby, api| {
+            let globals = make_globals(api);
+
+            let py_name =
+                crate::rubyx_object::ruby_to_python("Alice".into_value_with(ruby), api)
+                    .expect("should convert name");
+            let key = api.string_from_str("name");
+            api.dict_set_item(globals, key, py_name);
+            api.decref(key);
+            api.decref(py_name);
+
+            let result =
+                crate::eval::eval_with_globals("f'Hello, {name}!'", globals, api)
+                    .expect("eval should succeed");
+            let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
+            assert_eq!(
+                api.string_to_string(obj.as_ptr()),
+                Some("Hello, Alice!".to_string())
+            );
+
+            api.decref(globals);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_eval_with_globals_list_operations() {
+        with_ruby_python(|ruby, api| {
+            let globals = make_globals(api);
+
+            let arr = magnus::RArray::new();
+            arr.push(1_i64.into_value_with(ruby)).unwrap();
+            arr.push(2_i64.into_value_with(ruby)).unwrap();
+            arr.push(3_i64.into_value_with(ruby)).unwrap();
+            let py_items = crate::rubyx_object::ruby_to_python(arr.into_value_with(ruby), api)
+                .expect("should convert list");
+            let key = api.string_from_str("items");
+            api.dict_set_item(globals, key, py_items);
+            api.decref(key);
+            api.decref(py_items);
+
+            let result = crate::eval::eval_with_globals("sum(items)", globals, api)
+                .expect("eval should succeed");
+            let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
+            assert_eq!(api.long_to_i64(obj.as_ptr()), 6);
+
+            api.decref(globals);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_eval_with_globals_dict_access() {
+        with_ruby_python(|ruby, api| {
+            let globals = make_globals(api);
+
+            let hash = magnus::RHash::new();
+            hash.aset(ruby.sym_new("a"), 100_i64.into_value_with(ruby))
+                .unwrap();
+            hash.aset(ruby.sym_new("b"), 200_i64.into_value_with(ruby))
+                .unwrap();
+            let py_dict = crate::rubyx_object::ruby_to_python(hash.into_value_with(ruby), api)
+                .expect("should convert dict");
+            let key = api.string_from_str("data");
+            api.dict_set_item(globals, key, py_dict);
+            api.decref(key);
+            api.decref(py_dict);
+
+            let result =
+                crate::eval::eval_with_globals("data['a'] + data['b']", globals, api)
+                    .expect("eval should succeed");
+            let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
+            assert_eq!(api.long_to_i64(obj.as_ptr()), 300);
+
+            api.decref(globals);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_eval_with_globals_undefined_variable_errors() {
+        with_ruby_python(|_ruby, api| {
+            let globals = make_globals(api);
+
+            let result = crate::eval::eval_with_globals("undefined_var", globals, api);
+            assert!(result.is_err(), "should fail for undefined variable");
+
+            api.decref(globals);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_eval_with_globals_multiline_with_globals() {
+        with_ruby_python(|ruby, api| {
+            let globals = make_globals(api);
+
+            let py_n = crate::rubyx_object::ruby_to_python(5_i64.into_value_with(ruby), api)
+                .expect("should convert n");
+            let key = api.string_from_str("n");
+            api.dict_set_item(globals, key, py_n);
+            api.decref(key);
+            api.decref(py_n);
+
+            let code = "result = 0\nfor i in range(n):\n    result += i\nresult";
+            let result = crate::eval::eval_with_globals(code, globals, api)
+                .expect("multiline eval should succeed");
+            let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
+            assert_eq!(api.long_to_i64(obj.as_ptr()), 10); // 0+1+2+3+4 = 10
+
+            api.decref(globals);
+        });
+    }
+
+    // ========== await_with_globals tests ==========
+
+    #[test]
+    #[serial]
+    fn test_await_with_globals_simple() {
+        with_ruby_python(|ruby, api| {
+            let globals = make_globals(api);
+
+            // Define async function
+            api.run_string(
+                "import asyncio\nasync def multiply(a, b): return a * b\n",
+                PY_FILE_INPUT,
+                globals,
+                globals,
+            )
+            .expect("should define async function");
+
+            // Inject globals
+            let py_a = crate::rubyx_object::ruby_to_python(7_i64.into_value_with(ruby), api)
+                .expect("should convert a");
+            let py_b = crate::rubyx_object::ruby_to_python(6_i64.into_value_with(ruby), api)
+                .expect("should convert b");
+            let key_a = api.string_from_str("a");
+            let key_b = api.string_from_str("b");
+            api.dict_set_item(globals, key_a, py_a);
+            api.dict_set_item(globals, key_b, py_b);
+            api.decref(key_a);
+            api.decref(key_b);
+            api.decref(py_a);
+            api.decref(py_b);
+
+            let result = crate::eval::await_eval_with_globals("multiply(a, b)", globals, api)
+                .expect("await should succeed");
+            let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
+            assert_eq!(api.long_to_i64(obj.as_ptr()), 42);
+
+            api.decref(globals);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_await_with_globals_string_result() {
+        with_ruby_python(|ruby, api| {
+            let globals = make_globals(api);
+
+            api.run_string(
+                "import asyncio\nasync def greet(who): return f'hi {who}'\n",
+                PY_FILE_INPUT,
+                globals,
+                globals,
+            )
+            .expect("should define async function");
+
+            let py_who =
+                crate::rubyx_object::ruby_to_python("world".into_value_with(ruby), api)
+                    .expect("should convert who");
+            let key = api.string_from_str("who");
+            api.dict_set_item(globals, key, py_who);
+            api.decref(key);
+            api.decref(py_who);
+
+            let result =
+                crate::eval::await_eval_with_globals("greet(who)", globals, api)
+                    .expect("await should succeed");
+            let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
+            assert_eq!(
+                api.string_to_string(obj.as_ptr()),
+                Some("hi world".to_string())
+            );
+
+            api.decref(globals);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_await_with_globals_error_propagation() {
+        with_ruby_python(|ruby, api| {
+            let globals = make_globals(api);
+
+            api.run_string(
+                "import asyncio\nasync def check(val):\n    if val < 0: raise ValueError('negative')\n    return val\n",
+                PY_FILE_INPUT,
+                globals,
+                globals,
+            )
+            .expect("should define async function");
+
+            let py_val =
+                crate::rubyx_object::ruby_to_python((-1_i64).into_value_with(ruby), api)
+                    .expect("should convert val");
+            let key = api.string_from_str("val");
+            api.dict_set_item(globals, key, py_val);
+            api.decref(key);
+            api.decref(py_val);
+
+            let result = crate::eval::await_eval_with_globals("check(val)", globals, api);
+            assert!(result.is_err(), "should propagate ValueError");
+
+            api.decref(globals);
+        });
+    }
+
+    // ========== async_await_with_globals tests ==========
+
+    #[test]
+    #[serial]
+    fn test_async_await_with_globals_future() {
+        with_ruby_python(|ruby, api| {
+            let globals = make_globals(api);
+
+            api.run_string(
+                "import asyncio\nasync def add(x, y): return x + y\n",
+                PY_FILE_INPUT,
+                globals,
+                globals,
+            )
+            .expect("should define async function");
+
+            let py_x = crate::rubyx_object::ruby_to_python(15_i64.into_value_with(ruby), api)
+                .expect("should convert x");
+            let py_y = crate::rubyx_object::ruby_to_python(27_i64.into_value_with(ruby), api)
+                .expect("should convert y");
+            let key_x = api.string_from_str("x");
+            let key_y = api.string_from_str("y");
+            api.dict_set_item(globals, key_x, py_x);
+            api.dict_set_item(globals, key_y, py_y);
+            api.decref(key_x);
+            api.decref(key_y);
+            api.decref(py_x);
+            api.decref(py_y);
+
+            // Create coroutine
+            let coroutine = api
+                .run_string("add(x, y)", PY_EVAL_INPUT, globals, globals)
+                .expect("should create coroutine");
+
+            // Release GIL so the background thread can acquire it
+            let tstate = api.save_thread();
+            let future = crate::future::RubyxFuture::from_coroutine(coroutine, api);
+            let result = future.value().expect("future should resolve");
+            drop(future);
+            api.restore_thread(tstate);
+
+            assert_eq!(i64::try_convert(result).unwrap(), 42);
+
+            api.decref(coroutine);
+            api.decref(globals);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_async_await_with_globals_future_string() {
+        with_ruby_python(|ruby, api| {
+            let globals = make_globals(api);
+
+            api.run_string(
+                "import asyncio\nasync def fmt(prefix, val): return f'{prefix}: {val}'\n",
+                PY_FILE_INPUT,
+                globals,
+                globals,
+            )
+            .expect("should define async function");
+
+            let py_prefix =
+                crate::rubyx_object::ruby_to_python("result".into_value_with(ruby), api)
+                    .expect("should convert prefix");
+            let py_val = crate::rubyx_object::ruby_to_python(99_i64.into_value_with(ruby), api)
+                .expect("should convert val");
+            let key_p = api.string_from_str("prefix");
+            let key_v = api.string_from_str("val");
+            api.dict_set_item(globals, key_p, py_prefix);
+            api.dict_set_item(globals, key_v, py_val);
+            api.decref(key_p);
+            api.decref(key_v);
+            api.decref(py_prefix);
+            api.decref(py_val);
+
+            let coroutine = api
+                .run_string("fmt(prefix, val)", PY_EVAL_INPUT, globals, globals)
+                .expect("should create coroutine");
+
+            let tstate = api.save_thread();
+            let future = crate::future::RubyxFuture::from_coroutine(coroutine, api);
+            let result = future.value().expect("future should resolve");
+            drop(future);
+            api.restore_thread(tstate);
+
+            assert_eq!(String::try_convert(result).unwrap(), "result: 99");
+
+            api.decref(coroutine);
+            api.decref(globals);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_async_await_with_globals_error() {
+        with_ruby_python(|ruby, api| {
+            let globals = make_globals(api);
+
+            api.run_string(
+                "import asyncio\nasync def div(a, b): return a / b\n",
+                PY_FILE_INPUT,
+                globals,
+                globals,
+            )
+            .expect("should define async function");
+
+            let py_a = crate::rubyx_object::ruby_to_python(10_i64.into_value_with(ruby), api)
+                .expect("should convert a");
+            let py_b = crate::rubyx_object::ruby_to_python(0_i64.into_value_with(ruby), api)
+                .expect("should convert b");
+            let key_a = api.string_from_str("a");
+            let key_b = api.string_from_str("b");
+            api.dict_set_item(globals, key_a, py_a);
+            api.dict_set_item(globals, key_b, py_b);
+            api.decref(key_a);
+            api.decref(key_b);
+            api.decref(py_a);
+            api.decref(py_b);
+
+            let coroutine = api
+                .run_string("div(a, b)", PY_EVAL_INPUT, globals, globals)
+                .expect("should create coroutine");
+
+            let tstate = api.save_thread();
+            let future = crate::future::RubyxFuture::from_coroutine(coroutine, api);
+            let result = future.value();
+            drop(future);
+            api.restore_thread(tstate);
+
+            assert!(result.is_err(), "division by zero should propagate");
+
+            api.decref(coroutine);
             api.decref(globals);
         });
     }

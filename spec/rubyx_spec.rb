@@ -1095,4 +1095,84 @@ RSpec.describe 'Rubyx::NonBlockingStream', ruby_integration: true do
         "Counter was #{counter}, expected > 10 (other threads should run during streaming)"
     end
   end
+
+  # ========== Rubyx.eval with globals ==========
+
+  describe '.eval with globals' do
+    it 'injects integer globals' do
+      result = Rubyx.eval('x + y', x: 10, y: 20)
+      expect(result.to_ruby).to eq(30)
+    end
+
+    it 'injects string globals' do
+      result = Rubyx.eval("f'Hello, {name}!'", name: 'Alice')
+      expect(result.to_ruby).to eq('Hello, Alice!')
+    end
+
+    it 'injects float globals' do
+      result = Rubyx.eval('a * b', a: 2.5, b: 4.0)
+      expect(result.to_ruby).to eq(10.0)
+    end
+
+    it 'injects boolean globals' do
+      result = Rubyx.eval('flag', flag: true)
+      expect(result.to_ruby).to eq(true)
+    end
+
+    it 'injects nil as None' do
+      result = Rubyx.eval('val is None', val: nil)
+      expect(result.to_ruby).to eq(true)
+    end
+
+    it 'injects array as list' do
+      result = Rubyx.eval('sum(items)', items: [1, 2, 3, 4])
+      expect(result.to_ruby).to eq(10)
+    end
+
+    it 'injects hash as dict' do
+      result = Rubyx.eval("data['a'] + data['b']", data: { 'a' => 100, 'b' => 200 })
+      expect(result.to_ruby).to eq(300)
+    end
+
+    it 'injects symbol keys as string keys in dict' do
+      result = Rubyx.eval("d['name']", d: { name: 'Bob' })
+      expect(result.to_ruby).to eq('Bob')
+    end
+
+    it 'injects nested structures' do
+      result = Rubyx.eval('len(data["items"])', data: { 'items' => [1, 2, 3] })
+      expect(result.to_ruby).to eq(3)
+    end
+
+    it 'works with multiline code and globals' do
+      code = <<~PY
+        total = 0
+        for v in values:
+            total += v
+        total
+      PY
+      result = Rubyx.eval(code, values: [10, 20, 30])
+      expect(result.to_ruby).to eq(60)
+    end
+
+    it 'works with no globals (backward compatible)' do
+      result = Rubyx.eval('2 ** 10')
+      expect(result.to_ruby).to eq(1024)
+    end
+
+    it 'raises on undefined variable not in globals' do
+      expect { Rubyx.eval('x + missing', x: 1) }.to raise_error(Exception)
+    end
+
+    it 'injects RubyxObject as passthrough' do
+      py_list = Rubyx.eval('[1, 2, 3]')
+      result = Rubyx.eval('len(items)', items: py_list)
+      expect(result.to_ruby).to eq(3)
+    end
+
+    it 'globals do not leak between calls' do
+      Rubyx.eval('x + 1', x: 10)
+      expect { Rubyx.eval('x') }.to raise_error(Exception)
+    end
+  end
 end

@@ -41,6 +41,7 @@ rescue LoadError
   end
 end
 
+require_relative 'rubyx/context'
 require_relative 'rubyx/uv'
 require_relative 'rubyx/railtie' if defined?(::Rails::Railtie)
 
@@ -63,9 +64,61 @@ module Rubyx
   # Evaluate Python code and return the result.
   #
   # @param code [String] Python code to evaluate
-  # @return [Object] The result converted to a Ruby value
+  # @param globals [Hash] Ruby values to inject as Python globals
+  # @return [RubyxObject] The result as a wrapped Python object
+  # @example
+  #   Rubyx.eval("x + y", x: 10, y: 20)
   class << self
-    public define_method(:eval) { |code| Rubyx._eval(code.to_s) }
+    public define_method(:eval) { |code, **globals|
+      if globals.empty?
+        Rubyx._eval(code.to_s)
+      else
+        Rubyx._eval_with_globals(code.to_s, globals)
+      end
+    }
+  end
+
+  # Run a Python coroutine with asyncio.run() (blocking).
+  # Accepts either a RubyxObject (coroutine) or a code string with globals.
+  #
+  # @param code_or_coroutine [String, RubyxObject] Python code or coroutine object
+  # @param globals [Hash] Ruby values to inject as Python globals (only with code string)
+  # @return [RubyxObject] The awaited result
+  # @example
+  #   Rubyx.await("fetch(url)", url: "https://example.com")
+  def self.await(code_or_coroutine, **globals)
+    if code_or_coroutine.is_a?(String)
+      if globals.empty?
+        _await_with_globals(code_or_coroutine, {})
+      else
+        _await_with_globals(code_or_coroutine, globals)
+      end
+    else
+      raise ArgumentError, "cannot pass globals with a coroutine object" unless globals.empty?
+      _await(code_or_coroutine)
+    end
+  end
+
+  # Run a Python coroutine on a background thread (non-blocking).
+  # Accepts either a RubyxObject (coroutine) or a code string with globals.
+  #
+  # @param code_or_coroutine [String, RubyxObject] Python code or coroutine object
+  # @param globals [Hash] Ruby values to inject as Python globals (only with code string)
+  # @return [Rubyx::Future] A future that resolves to the result
+  # @example
+  #   future = Rubyx.async_await("fetch(url)", url: "https://example.com")
+  #   future.value
+  def self.async_await(code_or_coroutine, **globals)
+    if code_or_coroutine.is_a?(String)
+      if globals.empty?
+        _async_await_with_globals(code_or_coroutine, {})
+      else
+        _async_await_with_globals(code_or_coroutine, globals)
+      end
+    else
+      raise ArgumentError, "cannot pass globals with a coroutine object" unless globals.empty?
+      _async_await(code_or_coroutine)
+    end
   end
 
   # Convenience method: setup Python environment via uv and initialize.

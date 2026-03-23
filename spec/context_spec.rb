@@ -302,4 +302,113 @@ RSpec.describe 'Rubyx::Context', ruby_integration: true do
       expect(Rubyx.stream(r2).to_a).to eq([0, 1, 2, 3, 4])
     end
   end
+
+  # ========== Context#eval with globals ==========
+
+  describe '#eval with globals' do
+    it 'injects globals into context eval' do
+      ctx = Rubyx::Context.new
+      result = ctx.eval('x + y', x: 10, y: 20)
+      expect(result.to_ruby).to eq(30)
+    end
+
+    it 'injected globals persist in context' do
+      ctx = Rubyx::Context.new
+      ctx.eval('z = x * 2', x: 21)
+      result = ctx.eval('z')
+      expect(result.to_ruby).to eq(42)
+    end
+
+    it 'injects string globals' do
+      ctx = Rubyx::Context.new
+      result = ctx.eval("f'{greeting}, {name}!'", greeting: 'Hi', name: 'World')
+      expect(result.to_ruby).to eq('Hi, World!')
+    end
+
+    it 'injects array globals' do
+      ctx = Rubyx::Context.new
+      result = ctx.eval('max(items) - min(items)', items: [3, 7, 1, 9])
+      expect(result.to_ruby).to eq(8)
+    end
+
+    it 'injects hash globals' do
+      ctx = Rubyx::Context.new
+      result = ctx.eval("config['debug']", config: { 'debug' => true })
+      expect(result.to_ruby).to eq(true)
+    end
+
+    it 'overrides previously injected globals' do
+      ctx = Rubyx::Context.new
+      ctx.eval('x', x: 10)
+      result = ctx.eval('x', x: 99)
+      expect(result.to_ruby).to eq(99)
+    end
+
+    it 'mixes injected globals with context state' do
+      ctx = Rubyx::Context.new
+      ctx.eval('base = 100')
+      result = ctx.eval('base + offset', offset: 42)
+      expect(result.to_ruby).to eq(142)
+    end
+
+    it 'works without globals (backward compatible)' do
+      ctx = Rubyx::Context.new
+      ctx.eval('val = 5')
+      result = ctx.eval('val * 3')
+      expect(result.to_ruby).to eq(15)
+    end
+  end
+
+  # ========== Context#await with globals ==========
+
+  describe '#await with globals' do
+    it 'awaits async code with globals' do
+      ctx = Rubyx::Context.new
+      ctx.eval("import asyncio\nasync def multiply(a, b): return a * b")
+      result = ctx.await('multiply(a, b)', a: 6, b: 7)
+      expect(result.to_ruby).to eq(42)
+    end
+
+    it 'injected globals persist after await' do
+      ctx = Rubyx::Context.new
+      ctx.eval("import asyncio\nasync def store(val): return val")
+      ctx.await('store(x)', x: 99)
+      result = ctx.eval('x')
+      expect(result.to_ruby).to eq(99)
+    end
+
+    it 'propagates errors from async with globals' do
+      ctx = Rubyx::Context.new
+      ctx.eval("import asyncio\nasync def check(n):\n    if n < 0: raise ValueError('neg')\n    return n")
+      expect { ctx.await('check(n)', n: -1) }.to raise_error(StandardError, /neg/)
+    end
+  end
+
+  # ========== Context#async_await with globals ==========
+
+  describe '#async_await with globals' do
+    it 'returns Future with globals' do
+      ctx = Rubyx::Context.new
+      ctx.eval("import asyncio\nasync def add(x, y): return x + y")
+      future = ctx.async_await('add(x, y)', x: 15, y: 27)
+      expect(future).to be_a(Rubyx::Future)
+      expect(future.value).to eq(42)
+    end
+
+    it 'injected globals persist after async_await' do
+      ctx = Rubyx::Context.new
+      ctx.eval("import asyncio\nasync def identity(v): return v")
+      future = ctx.async_await('identity(val)', val: 'hello')
+      future.value
+      result = ctx.eval('val')
+      expect(result.to_ruby).to eq('hello')
+    end
+
+    it 'propagates errors from async with globals' do
+      ctx = Rubyx::Context.new
+      ctx.eval("import asyncio\nasync def div(a, b): return a / b")
+      future = ctx.async_await('div(a, b)', a: 10, b: 0)
+      expect { future.value }.to raise_error(StandardError, /division by zero|ZeroDivisionError/)
+    end
+  end
 end

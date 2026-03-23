@@ -248,8 +248,8 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
   # ========== Rubyx.async_await edge cases ==========
 
   describe 'Rubyx.async_await edge cases' do
-    it 'raises TypeError for non-RubyxObject argument' do
-      expect { Rubyx.async_await("not a python object") }.to raise_error(StandardError)
+    it 'raises error for invalid Python code string' do
+      expect { Rubyx.async_await("not a python object") }.to raise_error(Exception)
     end
 
     it 'future.value can only be consumed once' do
@@ -334,6 +334,56 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       result = Rubyx.await(coro)
       expect(result).to be_a(RubyxObject)
       expect(result).not_to be_a(Rubyx::Future)
+    end
+  end
+
+  # ========== Rubyx.await with globals ==========
+
+  describe 'Rubyx.await with globals' do
+    it 'awaits coroutine expression with globals' do
+      ctx = Rubyx.context
+      ctx.eval("import asyncio\nasync def mul(a, b): return a * b")
+      result = ctx.await('mul(a, b)', a: 6, b: 7)
+      expect(result.to_ruby).to eq(42)
+    end
+
+    it 'awaits with string globals' do
+      ctx = Rubyx.context
+      ctx.eval("import asyncio\nasync def greet(n): return f'hi {n}'")
+      result = ctx.await('greet(name)', name: 'world')
+      expect(result.to_ruby).to eq('hi world')
+    end
+
+    it 'propagates errors with globals' do
+      ctx = Rubyx.context
+      ctx.eval("import asyncio\nasync def fail_neg(v):\n    if v < 0: raise ValueError('negative')\n    return v")
+      expect { ctx.await('fail_neg(val)', val: -1) }.to raise_error(StandardError, /negative/)
+    end
+  end
+
+  # ========== Rubyx.async_await with globals ==========
+
+  describe 'Rubyx.async_await with globals' do
+    it 'returns Future with globals' do
+      ctx = Rubyx.context
+      ctx.eval("import asyncio\nasync def add(a, b): return a + b")
+      future = ctx.async_await('add(x, y)', x: 20, y: 22)
+      expect(future).to be_a(Rubyx::Future)
+      expect(future.value).to eq(42)
+    end
+
+    it 'handles string result with globals' do
+      ctx = Rubyx.context
+      ctx.eval("import asyncio\nasync def greet(n): return f'hello {n}'")
+      future = ctx.async_await('greet(name)', name: 'world')
+      expect(future.value).to eq('hello world')
+    end
+
+    it 'propagates errors with globals' do
+      ctx = Rubyx.context
+      ctx.eval("import asyncio\nasync def div(x, y): return x / y")
+      future = ctx.async_await('div(a, b)', a: 10, b: 0)
+      expect { future.value }.to raise_error(StandardError, /division by zero|ZeroDivisionError/)
     end
   end
 end

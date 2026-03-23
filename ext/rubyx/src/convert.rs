@@ -19,7 +19,6 @@ pub enum ConvertError {
     EncodingError,
 }
 
-// TODO: Implement ToPython trait
 // pub trait ToPython {
 //     fn to_python(&self, api: &PythonApi) -> Result<*mut PyObject, ConvertError>;
 // }
@@ -33,7 +32,6 @@ pub trait FromPython: Sized {
     fn from_python(obj: *mut PyObject, api: &PythonApi) -> Result<Self, ConvertError>;
 }
 
-// TODO: Implement ToPython for i64
 impl ToPython for i64 {
     fn to_python(&self, api: &PythonApi) -> Result<*mut PyObject, ConvertError> {
         let obj = api.long_from_i64(*self);
@@ -45,7 +43,6 @@ impl ToPython for i64 {
         }
     }
 }
-// TODO: Implement FromPython for i64
 impl FromPython for i64 {
     fn from_python(obj: *mut PyObject, api: &PythonApi) -> Result<Self, ConvertError> {
         if obj.is_null() {
@@ -72,7 +69,6 @@ impl FromPython for i64 {
         Ok(value)
     }
 }
-// TODO: Implement ToPython for f64
 impl ToPython for f64 {
     fn to_python(&self, api: &PythonApi) -> Result<*mut PyObject, ConvertError> {
         let obj = api.float_from_f64(*self);
@@ -83,7 +79,6 @@ impl ToPython for f64 {
     }
 }
 
-// TODO: Implement FromPython for f64
 impl FromPython for f64 {
     fn from_python(obj: *mut PyObject, api: &PythonApi) -> Result<Self, ConvertError> {
         if obj.is_null() {
@@ -106,7 +101,6 @@ impl FromPython for f64 {
     }
 }
 
-// TODO: Implement ToPython for bool
 impl ToPython for bool {
     fn to_python(&self, api: &PythonApi) -> Result<*mut PyObject, ConvertError> {
         let obj = api.bool_from_bool(*self);
@@ -115,7 +109,6 @@ impl ToPython for bool {
     }
 }
 
-// TODO: Implement FromPython for bool
 impl FromPython for bool {
     fn from_python(obj: *mut PyObject, api: &PythonApi) -> Result<Self, ConvertError> {
         if obj.is_null() {
@@ -160,7 +153,6 @@ impl FromPython for String {
     }
 }
 
-// TODO: Implement ToPython for Option<T> where T: ToPython
 impl<T: ToPython> ToPython for Option<T> {
     fn to_python(&self, api: &PythonApi) -> Result<*mut PyObject, ConvertError> {
         match self {
@@ -173,7 +165,6 @@ impl<T: ToPython> ToPython for Option<T> {
     }
 }
 
-// TODO: Implement ToPython for Vec<T>
 impl<T: ToPython> ToPython for Vec<T> {
     fn to_python(&self, api: &PythonApi) -> Result<*mut PyObject, ConvertError> {
         let py_list = api.list_new(self.len() as isize);
@@ -194,7 +185,7 @@ impl<T: ToPython> ToPython for Vec<T> {
         Ok(py_list)
     }
 }
-// TODO: Implement FromPython for Vec<T>
+
 impl<T: FromPython> FromPython for Vec<T> {
     fn from_python(obj: *mut PyObject, api: &PythonApi) -> Result<Self, ConvertError> {
         if obj.is_null() {
@@ -220,7 +211,6 @@ impl<T: FromPython> FromPython for Vec<T> {
         Ok(list)
     }
 }
-// TODO: Implement ToPython for HashMap<K, V>
 impl<K: ToPython, V: ToPython> ToPython for HashMap<K, V> {
     fn to_python(&self, api: &PythonApi) -> Result<*mut PyObject, ConvertError> {
         let dict = api.dict_new();
@@ -259,7 +249,7 @@ impl<K: ToPython, V: ToPython> ToPython for HashMap<K, V> {
         Ok(dict)
     }
 }
-// TODO: Implement FromPython for HashMap<K, V>
+
 impl<K: FromPython + Eq + std::hash::Hash, V: FromPython> FromPython for HashMap<K, V> {
     fn from_python(obj: *mut PyObject, api: &PythonApi) -> Result<Self, ConvertError> {
         if obj.is_null() {
@@ -282,6 +272,17 @@ impl<K: FromPython + Eq + std::hash::Hash, V: FromPython> FromPython for HashMap
         }
         Ok(map)
     }
+}
+
+/// Convert a dynamic Ruby Value to a Python object.
+/// Delegates to rubyx_object::ruby_to_python which handles all types.
+pub fn ruby_value_to_python(
+    val: magnus::Value,
+    api: &PythonApi,
+) -> Result<*mut PyObject, ConvertError> {
+    crate::rubyx_object::ruby_to_python(val, api).map_err(|e| {
+        ConvertError::PythonError(e.to_string())
+    })
 }
 
 #[cfg(test)]

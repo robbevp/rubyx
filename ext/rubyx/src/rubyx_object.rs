@@ -7,7 +7,7 @@ use crate::stream::SendableValue;
 use magnus::r_hash::ForEach;
 use magnus::typed_data::Obj;
 use magnus::value::ReprValue;
-use magnus::{IntoValue, RHash, Ruby, Symbol, TryConvert, Value};
+use magnus::{Class, IntoValue, RHash, Ruby, Symbol, TryConvert, Value};
 use std::ffi::CString;
 
 const RUBY_IMPLICIT_CONVERSIONS: &[&str] = &[
@@ -93,7 +93,7 @@ pub(crate) fn python_to_sendable(
     }
     Err("Cannot convert Python value to Ruby".to_string())
 }
-fn ruby_to_python(value: Value, api: &PythonApi) -> Result<*mut PyObject, magnus::Error> {
+pub(crate) fn ruby_to_python(value: Value, api: &PythonApi) -> Result<*mut PyObject, magnus::Error> {
     let ruby = Ruby::get().map_err(|e| {
         magnus::Error::new(
             ruby_helpers::runtime_error(),
@@ -124,20 +124,108 @@ fn ruby_to_python(value: Value, api: &PythonApi) -> Result<*mut PyObject, magnus
             .to_python(api)
             .map_err(|e| magnus::Error::new(ruby_helpers::runtime_error(), e.to_string()));
     }
+    if value.is_kind_of(ruby.class_symbol()) {
+        let sym = Symbol::try_convert(value)?;
+        let name = sym.name().map_err(|e| {
+            magnus::Error::new(ruby_helpers::runtime_error(), format!("Symbol name error: {e}"))
+        })?;
+        let py_str = api.string_from_str(name.as_ref());
+        if py_str.is_null() {
+            return Err(magnus::Error::new(
+                ruby_helpers::runtime_error(),
+                "Failed to create Python string from Symbol",
+            ));
+        }
+        return Ok(py_str);
+    }
     if value.is_kind_of(ruby.class_string()) {
         let val = String::try_convert(value)?;
         return val
             .to_python(api)
             .map_err(|e| magnus::Error::new(ruby_helpers::runtime_error(), e.to_string()));
     }
+    if value.is_kind_of(ruby.class_array()) {
+        let arr = magnus::RArray::try_convert(value)?;
+        let len = arr.len();
+        let py_list = api.list_new(len as isize);
+        if py_list.is_null() {
+            return Err(magnus::Error::new(
+                ruby_helpers::runtime_error(),
+                "Failed to create Python list",
+            ));
+        }
+        for (i, item) in arr.into_iter().enumerate() {
+            let py_item = ruby_to_python(item, api).map_err(|e| {
+                api.decref(py_list);
+                e
+            })?;
+            let result = api.list_set_item(py_list, i as isize, py_item);
+            if result != 0 {
+                api.decref(py_item);
+                api.decref(py_list);
+                return Err(magnus::Error::new(
+                    ruby_helpers::runtime_error(),
+                    "Failed to set Python list item",
+                ));
+            }
+        }
+        return Ok(py_list);
+    }
+    if value.is_kind_of(ruby.class_hash()) {
+        let hash = RHash::try_convert(value)?;
+        let dict = api.dict_new();
+        if dict.is_null() {
+            return Err(magnus::Error::new(
+                ruby_helpers::runtime_error(),
+                "Failed to create Python dict",
+            ));
+        }
+        let mut err: Option<magnus::Error> = None;
+        hash.foreach(|k: Value, v: Value| {
+            let py_key = match ruby_to_python(k, api) {
+                Ok(k) => k,
+                Err(e) => {
+                    err = Some(e);
+                    return Ok(ForEach::Stop);
+                }
+            };
+            let py_val = match ruby_to_python(v, api) {
+                Ok(v) => v,
+                Err(e) => {
+                    api.decref(py_key);
+                    err = Some(e);
+                    return Ok(ForEach::Stop);
+                }
+            };
+            let result = api.dict_set_item(dict, py_key, py_val);
+            api.decref(py_key);
+            api.decref(py_val);
+            if result == -1 {
+                err = Some(magnus::Error::new(
+                    ruby_helpers::runtime_error(),
+                    "Failed to set Python dict item",
+                ));
+                return Ok(ForEach::Stop);
+            }
+            Ok(ForEach::Continue)
+        })?;
+        if let Some(e) = err {
+            api.decref(dict);
+            return Err(e);
+        }
+        return Ok(dict);
+    }
     // Already wrapped Python object
     if let Ok(obj) = Obj::<RubyxObject>::try_convert(value) {
-        api.incref(obj.as_ptr()); // Obj<T> derefs to &T, so your as_ptr() works
+        api.incref(obj.as_ptr());
         return Ok(obj.as_ptr());
     }
     Err(magnus::Error::new(
         ruby_helpers::type_error(),
-        "Cannot convert Ruby value to Python",
+        format!(
+            "Cannot convert {} to Python object",
+            unsafe { value.class().name() }
+        ),
     ))
 }
 
@@ -723,6 +811,158 @@ mod tests {
                 .expect("string conversion should succeed");
             assert_eq!(api.string_to_string(py_str), Some("hello".to_string()));
             api.decref(py_str);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_ruby_to_python_symbol() {
+        with_ruby_python(|ruby, api| {
+            let sym = ruby.sym_new("hello");
+            let py_str = ruby_to_python(sym.as_value(), api)
+                .expect("symbol conversion should succeed");
+            assert!(api.is_string(py_str));
+            assert_eq!(api.string_to_string(py_str), Some("hello".to_string()));
+            api.decref(py_str);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_ruby_to_python_false() {
+        with_ruby_python(|ruby, api| {
+            let py_false = ruby_to_python(false.into_value_with(ruby), api)
+                .expect("false conversion should succeed");
+            assert!(api.is_false(py_false));
+            api.decref(py_false);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_ruby_to_python_array() {
+        with_ruby_python(|ruby, api| {
+            let arr = magnus::RArray::new();
+            arr.push(1_i64.into_value_with(ruby)).unwrap();
+            arr.push(2_i64.into_value_with(ruby)).unwrap();
+            arr.push(3_i64.into_value_with(ruby)).unwrap();
+            let py_list = ruby_to_python(arr.into_value_with(ruby), api)
+                .expect("array conversion should succeed");
+            assert!(api.list_check(py_list));
+            assert_eq!(api.list_size(py_list), 3);
+            assert_eq!(api.long_to_i64(api.list_get_item(py_list, 0)), 1);
+            assert_eq!(api.long_to_i64(api.list_get_item(py_list, 1)), 2);
+            assert_eq!(api.long_to_i64(api.list_get_item(py_list, 2)), 3);
+            api.decref(py_list);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_ruby_to_python_hash() {
+        with_ruby_python(|ruby, api| {
+            let hash = RHash::new();
+            hash.aset(
+                ruby.sym_new("name"),
+                "Alice".into_value_with(ruby),
+            )
+            .unwrap();
+            hash.aset(
+                ruby.sym_new("age"),
+                30_i64.into_value_with(ruby),
+            )
+            .unwrap();
+
+            let py_dict = ruby_to_python(hash.into_value_with(ruby), api)
+                .expect("hash conversion should succeed");
+            assert!(api.dict_check(py_dict));
+
+            let key_name = api.string_from_str("name");
+            let val_name = api.dict_get_item(py_dict, key_name);
+            assert!(!val_name.is_null());
+            assert_eq!(api.string_to_string(val_name), Some("Alice".to_string()));
+            api.decref(key_name);
+
+            let key_age = api.string_from_str("age");
+            let val_age = api.dict_get_item(py_dict, key_age);
+            assert!(!val_age.is_null());
+            assert_eq!(api.long_to_i64(val_age), 30);
+            api.decref(key_age);
+
+            api.decref(py_dict);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_ruby_to_python_nested_array_in_hash() {
+        with_ruby_python(|ruby, api| {
+            let inner = magnus::RArray::new();
+            inner.push(10_i64.into_value_with(ruby)).unwrap();
+            inner.push(20_i64.into_value_with(ruby)).unwrap();
+            let hash = RHash::new();
+            hash.aset(ruby.sym_new("items"), inner.into_value_with(ruby)).unwrap();
+
+            let py_dict = ruby_to_python(hash.into_value_with(ruby), api)
+                .expect("nested conversion should succeed");
+            assert!(api.dict_check(py_dict));
+
+            let key = api.string_from_str("items");
+            let py_list = api.dict_get_item(py_dict, key);
+            assert!(!py_list.is_null());
+            assert!(api.list_check(py_list));
+            assert_eq!(api.list_size(py_list), 2);
+            assert_eq!(api.long_to_i64(api.list_get_item(py_list, 0)), 10);
+            assert_eq!(api.long_to_i64(api.list_get_item(py_list, 1)), 20);
+
+            api.decref(key);
+            api.decref(py_dict);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_ruby_to_python_empty_array() {
+        with_ruby_python(|ruby, api| {
+            let arr = magnus::RArray::new();
+            let py_list = ruby_to_python(arr.into_value_with(ruby), api)
+                .expect("empty array should convert");
+            assert!(api.list_check(py_list));
+            assert_eq!(api.list_size(py_list), 0);
+            api.decref(py_list);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_ruby_to_python_empty_hash() {
+        with_ruby_python(|ruby, api| {
+            let hash = RHash::new();
+            let py_dict = ruby_to_python(hash.into_value_with(ruby), api)
+                .expect("empty hash should convert");
+            assert!(api.dict_check(py_dict));
+            api.decref(py_dict);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_ruby_to_python_rubyx_object_passthrough() {
+        with_ruby_python(|ruby, api| {
+            // Create a Python object via eval
+            let globals = crate::eval::make_globals(api);
+            let py_obj = api
+                .run_string("42", 258, globals.ptr(), globals.ptr())
+                .expect("eval should succeed");
+
+            let wrapper = RubyxObject::new(py_obj, api).expect("wrapper should be created");
+            let ruby_val = wrapper.into_value_with(ruby);
+
+            let py_result = ruby_to_python(ruby_val, api)
+                .expect("RubyxObject passthrough should succeed");
+            assert_eq!(api.long_to_i64(py_result), 42);
+            api.decref(py_result);
+            api.decref(py_obj);
         });
     }
 

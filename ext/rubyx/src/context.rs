@@ -1,6 +1,9 @@
 use crate::eval::{await_eval_with_globals, eval_with_globals, make_globals};
 use crate::python_api::PythonApi;
 use crate::python_ffi::PyObject;
+use crate::rubyx_object::ruby_to_python;
+use magnus::r_hash::ForEach;
+use magnus::{RHash, Value};
 
 #[magnus::wrap(class = "Rubyx::Context", free_immediately)]
 pub(crate) struct RubyxContext {
@@ -31,8 +34,32 @@ impl RubyxContext {
         result
     }
 
+    pub(crate) fn eval_with_globals(
+        &self,
+        code: String,
+        globals_hash: RHash,
+    ) -> Result<magnus::Value, magnus::Error> {
+        let gil = self.api.ensure_gil();
+        self.inject_globals(globals_hash)?;
+        let result = eval_with_globals(&code, self.globals, self.api);
+        self.api.release_gil(gil);
+        result
+    }
+
     pub(crate) fn await_eval(&self, code: String) -> Result<magnus::Value, magnus::Error> {
         let gil = self.api.ensure_gil();
+        let result = await_eval_with_globals(&code, self.globals, self.api);
+        self.api.release_gil(gil);
+        result
+    }
+
+    pub(crate) fn await_eval_with_globals(
+        &self,
+        code: String,
+        globals_hash: RHash,
+    ) -> Result<magnus::Value, magnus::Error> {
+        let gil = self.api.ensure_gil();
+        self.inject_globals(globals_hash)?;
         let result = await_eval_with_globals(&code, self.globals, self.api);
         self.api.release_gil(gil);
         result
@@ -79,6 +106,81 @@ impl RubyxContext {
         self.api.release_gil(gil);
 
         Ok(future)
+    }
+
+    pub(crate) fn async_await_eval_with_globals(
+        &self,
+        code: String,
+        globals_hash: RHash,
+    ) -> Result<crate::future::RubyxFuture, magnus::Error> {
+        let gil = self.api.ensure_gil();
+        self.inject_globals(globals_hash)?;
+
+        let py_coroutine = match self.api.run_string(&code, 258, self.globals, self.globals) {
+            Ok(obj) if !obj.is_null() => obj,
+            Ok(_) => {
+                let err = if self.api.has_error() {
+                    crate::python_api::PythonApi::extract_exception(self.api)
+                        .map(magnus::Error::from)
+                        .unwrap_or_else(|| {
+                            magnus::Error::new(
+                                crate::ruby_helpers::runtime_error(),
+                                "Python eval failed",
+                            )
+                        })
+                } else {
+                    magnus::Error::new(
+                        crate::ruby_helpers::runtime_error(),
+                        "Python eval returned null",
+                    )
+                };
+                self.api.release_gil(gil);
+                return Err(err);
+            }
+            Err(e) => {
+                self.api.release_gil(gil);
+                return Err(magnus::Error::new(crate::ruby_helpers::runtime_error(), e));
+            }
+        };
+
+        let future = crate::future::RubyxFuture::from_coroutine(py_coroutine, self.api);
+        self.api.decref(py_coroutine);
+        self.api.release_gil(gil);
+
+        Ok(future)
+    }
+
+    /// Merge a Ruby Hash into the persistent globals dict.
+    /// Caller must hold the GIL.
+    fn inject_globals(&self, globals_hash: RHash) -> Result<(), magnus::Error> {
+        let api = self.api;
+        let globals = self.globals;
+        let mut err: Option<magnus::Error> = None;
+        globals_hash.foreach(|key: Value, val: Value| {
+            let py_key = match ruby_to_python(key, api) {
+                Ok(k) => k,
+                Err(e) => {
+                    err = Some(e);
+                    return Ok(ForEach::Stop);
+                }
+            };
+            let py_val = match ruby_to_python(val, api) {
+                Ok(v) => v,
+                Err(e) => {
+                    api.decref(py_key);
+                    err = Some(e);
+                    return Ok(ForEach::Stop);
+                }
+            };
+            api.dict_set_item(globals, py_key, py_val);
+            api.decref(py_key);
+            api.decref(py_val);
+            Ok(ForEach::Continue)
+        })?;
+        if let Some(e) = err {
+            return Err(e);
+        }
+        Ok(())
     }
 }
 
@@ -432,5 +534,287 @@ mod tests {
         api.decref(r1);
         api.decref(r2);
         api.decref(r3);
+    }
+
+    // ========== Context inject_globals tests ==========
+
+    #[test]
+    #[serial]
+    fn test_context_inject_globals_simple() {
+        use crate::test_helpers::with_ruby_python;
+        use magnus::IntoValue;
+        with_ruby_python(|ruby, api| {
+            let globals_guard = make_globals(api);
+            let globals = globals_guard.ptr();
+
+            let hash = magnus::RHash::new();
+            hash.aset(ruby.sym_new("x"), 10_i64.into_value_with(ruby))
+                .unwrap();
+            hash.aset(ruby.sym_new("y"), 20_i64.into_value_with(ruby))
+                .unwrap();
+
+            // Inject into globals
+            let ctx = super::RubyxContext { globals, api };
+            ctx.inject_globals(hash).expect("inject should succeed");
+
+            // Verify x and y are in globals
+            let key_x = api.string_from_str("x");
+            let val_x = api.dict_get_item(globals, key_x);
+            assert!(!val_x.is_null());
+            assert_eq!(api.long_to_i64(val_x), 10);
+            api.decref(key_x);
+
+            let key_y = api.string_from_str("y");
+            let val_y = api.dict_get_item(globals, key_y);
+            assert!(!val_y.is_null());
+            assert_eq!(api.long_to_i64(val_y), 20);
+            api.decref(key_y);
+
+            // Prevent Drop from double-decref
+            std::mem::forget(ctx);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_context_eval_with_globals() {
+        use crate::test_helpers::with_ruby_python;
+        use magnus::{IntoValue, TryConvert};
+        with_ruby_python(|ruby, api| {
+            let ctx = super::RubyxContext::new().expect("context should create");
+
+            let hash = magnus::RHash::new();
+            hash.aset(ruby.sym_new("a"), 5_i64.into_value_with(ruby))
+                .unwrap();
+            hash.aset(ruby.sym_new("b"), 7_i64.into_value_with(ruby))
+                .unwrap();
+
+            let result = ctx
+                .eval_with_globals("a * b".to_string(), hash)
+                .expect("eval should succeed");
+
+            let obj = magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(
+                result,
+            )
+            .expect("should be RubyxObject");
+            assert_eq!(api.long_to_i64(obj.as_ptr()), 35);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_context_globals_persist_after_inject() {
+        use crate::test_helpers::with_ruby_python;
+        use magnus::{IntoValue, TryConvert};
+        with_ruby_python(|ruby, api| {
+            let ctx = super::RubyxContext::new().expect("context should create");
+
+            // Inject x=100
+            let hash = magnus::RHash::new();
+            hash.aset(ruby.sym_new("x"), 100_i64.into_value_with(ruby))
+                .unwrap();
+            let _ = ctx
+                .eval_with_globals("y = x + 1".to_string(), hash)
+                .expect("eval should succeed");
+
+            // x and y should persist in context without re-injecting
+            let result = ctx
+                .eval("x + y".to_string())
+                .expect("should access persisted globals");
+            let obj = magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(
+                result,
+            )
+            .expect("should be RubyxObject");
+            assert_eq!(api.long_to_i64(obj.as_ptr()), 201); // 100 + 101
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_context_eval_with_globals_string_values() {
+        use crate::test_helpers::with_ruby_python;
+        use magnus::{IntoValue, TryConvert};
+        with_ruby_python(|ruby, api| {
+            let ctx = super::RubyxContext::new().expect("context should create");
+
+            let hash = magnus::RHash::new();
+            hash.aset(
+                ruby.sym_new("greeting"),
+                "hello".into_value_with(ruby),
+            )
+            .unwrap();
+            hash.aset(
+                ruby.sym_new("name"),
+                "world".into_value_with(ruby),
+            )
+            .unwrap();
+
+            let result = ctx
+                .eval_with_globals("f'{greeting}, {name}!'".to_string(), hash)
+                .expect("eval should succeed");
+
+            let obj = magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(
+                result,
+            )
+            .expect("should be RubyxObject");
+            assert_eq!(
+                api.string_to_string(obj.as_ptr()),
+                Some("hello, world!".to_string())
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_context_eval_with_globals_list() {
+        use crate::test_helpers::with_ruby_python;
+        use magnus::{IntoValue, TryConvert};
+        with_ruby_python(|ruby, api| {
+            let ctx = super::RubyxContext::new().expect("context should create");
+
+            let arr = magnus::RArray::new();
+            arr.push(1_i64.into_value_with(ruby)).unwrap();
+            arr.push(2_i64.into_value_with(ruby)).unwrap();
+            arr.push(3_i64.into_value_with(ruby)).unwrap();
+
+            let hash = magnus::RHash::new();
+            hash.aset(
+                ruby.sym_new("items"),
+                arr.into_value_with(ruby),
+            )
+            .unwrap();
+
+            let result = ctx
+                .eval_with_globals("sum(items)".to_string(), hash)
+                .expect("eval should succeed");
+
+            let obj = magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(
+                result,
+            )
+            .expect("should be RubyxObject");
+            assert_eq!(api.long_to_i64(obj.as_ptr()), 6);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_context_await_with_globals() {
+        use crate::test_helpers::with_ruby_python;
+        use magnus::{IntoValue, TryConvert};
+        with_ruby_python(|ruby, api| {
+            let ctx = super::RubyxContext::new().expect("context should create");
+
+            // Define async function in context
+            ctx.eval("import asyncio\nasync def multiply(a, b): return a * b".to_string())
+                .expect("should define function");
+
+            let hash = magnus::RHash::new();
+            hash.aset(ruby.sym_new("a"), 6_i64.into_value_with(ruby))
+                .unwrap();
+            hash.aset(ruby.sym_new("b"), 7_i64.into_value_with(ruby))
+                .unwrap();
+
+            let result = ctx
+                .await_eval_with_globals("multiply(a, b)".to_string(), hash)
+                .expect("await should succeed");
+
+            let obj = magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(
+                result,
+            )
+            .expect("should be RubyxObject");
+            assert_eq!(api.long_to_i64(obj.as_ptr()), 42);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_context_await_with_globals_error() {
+        use crate::test_helpers::with_ruby_python;
+        use magnus::IntoValue;
+        with_ruby_python(|ruby, _api| {
+            let ctx = super::RubyxContext::new().expect("context should create");
+
+            ctx.eval(
+                "import asyncio\nasync def fail_if_neg(n):\n    if n < 0: raise ValueError('neg')\n    return n"
+                    .to_string(),
+            )
+            .expect("should define function");
+
+            let hash = magnus::RHash::new();
+            hash.aset(ruby.sym_new("n"), (-5_i64).into_value_with(ruby))
+                .unwrap();
+
+            let result = ctx.await_eval_with_globals("fail_if_neg(n)".to_string(), hash);
+            assert!(result.is_err(), "should propagate ValueError");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_context_async_await_with_globals() {
+        use crate::test_helpers::with_ruby_python;
+        use magnus::{IntoValue, TryConvert};
+        with_ruby_python(|ruby, api| {
+            let ctx = super::RubyxContext::new().expect("context should create");
+
+            ctx.eval("import asyncio\nasync def add(x, y): return x + y".to_string())
+                .expect("should define function");
+
+            let hash = magnus::RHash::new();
+            hash.aset(ruby.sym_new("x"), 15_i64.into_value_with(ruby))
+                .unwrap();
+            hash.aset(ruby.sym_new("y"), 27_i64.into_value_with(ruby))
+                .unwrap();
+
+            // Need to release GIL for the background thread
+            let gil = api.ensure_gil();
+            let future = ctx
+                .async_await_eval_with_globals("add(x, y)".to_string(), hash)
+                .expect("async_await should succeed");
+            api.release_gil(gil);
+
+            let tstate = api.save_thread();
+            let result = future.value().expect("future should resolve");
+            drop(future);
+            api.restore_thread(tstate);
+
+            assert_eq!(i64::try_convert(result).unwrap(), 42);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_context_globals_override() {
+        use crate::test_helpers::with_ruby_python;
+        use magnus::{IntoValue, TryConvert};
+        with_ruby_python(|ruby, api| {
+            let ctx = super::RubyxContext::new().expect("context should create");
+
+            // Inject x=10
+            let hash1 = magnus::RHash::new();
+            hash1
+                .aset(ruby.sym_new("x"), 10_i64.into_value_with(ruby))
+                .unwrap();
+            let r1 = ctx
+                .eval_with_globals("x".to_string(), hash1)
+                .expect("eval should succeed");
+            let obj1 =
+                magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(r1)
+                    .unwrap();
+            assert_eq!(api.long_to_i64(obj1.as_ptr()), 10);
+
+            // Override x=99
+            let hash2 = magnus::RHash::new();
+            hash2
+                .aset(ruby.sym_new("x"), 99_i64.into_value_with(ruby))
+                .unwrap();
+            let r2 = ctx
+                .eval_with_globals("x".to_string(), hash2)
+                .expect("eval should succeed");
+            let obj2 =
+                magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(r2)
+                    .unwrap();
+            assert_eq!(api.long_to_i64(obj2.as_ptr()), 99);
+        });
     }
 }
