@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/logo.png" alt="rubyx-py" width="200">
+
 # Rubyx-py
 
 **Call Python from Ruby. No microservices, no REST APIs, no serialization overhead.**
