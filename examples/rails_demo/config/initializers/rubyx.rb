@@ -17,14 +17,17 @@ Rubyx::Rails.configure do |config|
 end
 
 # Load models once at boot (skip in test to avoid slow startup)
-unless Rails.env.test?
-  # LLM — Qwen2.5-0.5B-Instruct
-  llm = Rubyx.import('services.llm')
-  llm.load_model("Qwen/Qwen2.5-0.5B-Instruct")
-  Rails.logger.info "rubyx-py: LLM model loaded"
+# Must run after Python is initialized — use after_initialize
+Rails.application.config.after_initialize do
+  unless Rails.env.test?
+    # LLM — Qwen2.5-0.5B-Instruct
+    llm = Rubyx.import('services.llm')
+    llm.load_model("Qwen/Qwen2.5-0.5B-Instruct")
+    Rails.logger.info "rubyx-py: LLM model loaded"
 
-  # OCR — GLM-OCR via Ollama
-  ocr = Rubyx.import('services.ocr')
-  ocr.load(Rails.root.join('config/glmocr.yaml').to_s)
-  Rails.logger.info "rubyx-py: OCR model loaded"
+    # OCR — GLM-OCR via Ollama
+    ocr = Rubyx.import('services.ocr')
+    ocr.load(Rails.root.join('config/glmocr.yaml').to_s)
+    Rails.logger.info "rubyx-py: OCR model loaded"
+  end
 end

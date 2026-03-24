@@ -118,6 +118,17 @@ class DemoControllerTest < ActionDispatch::IntegrationTest
     assert response.body.include?("[DONE]")
   end
 
+  test "llm_stream every non-empty line has data: prefix" do
+    get "/demo/llm_stream", params: { prompt: "test" }
+    assert_response :success
+
+    lines = response.body.lines.map(&:strip)
+    non_empty = lines.reject(&:empty?)
+    non_empty.each do |line|
+      assert line.start_with?("data: "), "SSE line missing 'data: ' prefix: #{line.inspect}"
+    end
+  end
+
   # ===========================================================================
   # Async — blocking await
   # ===========================================================================

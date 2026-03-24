@@ -92,7 +92,8 @@ class DemoController < ApplicationController
 
     gen = llm.fake_llm_stream(prompt, 0.05)
     Rubyx.stream(gen).each do |token|
-      response.stream.write("data: #{token}\n\n")
+      token_str = token.to_s.gsub("\n", "\\n")
+      response.stream.write("data: #{token_str}\n\n")
     end
     response.stream.write("data: [DONE]\n\n")
   rescue ActionController::Live::ClientDisconnected

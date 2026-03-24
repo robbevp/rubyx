@@ -55,7 +55,105 @@ gem 'rubyx-py'
 
 Python is auto-managed by [uv](https://github.com/astral-sh/uv). No manual install needed.
 
-## Rails Setup Example
+## Rails Setup Simple Example
+
+```bash
+rails generate rubyx:install
+```
+
+Creates `config/initializers/rubyx.rb`, `pyproject.toml`, and `app/python/`.
+
+### Configuration
+
+```ruby
+# config/initializers/rubyx.rb
+Rubyx::Rails.configure do |config|
+  config.pyproject_path = Rails.root.join('pyproject.toml')
+  config.auto_init = true
+  config.python_paths = [Rails.root.join('app/python').to_s]
+end
+```
+
+### Python dependencies
+
+```toml
+# pyproject.toml
+[project]
+name = "my-app"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+```
+
+### 1. Sync — call a Python function
+
+```python
+# app/python/hello.py
+def greet(name):
+    return f"Hello, {name}!"
+```
+
+```ruby
+class GreetingsController < ApplicationController
+  def show
+    hello = Rubyx.import('hello')
+    render json: { message: hello.greet(params[:name]).to_ruby }
+  end
+end
+```
+
+### 2. Streaming — iterate a Python generator
+
+```python
+# app/python/count.py
+def count_up(n):
+    for i in range(n):
+        yield f"Step {i + 1}"
+```
+
+```ruby
+class CountController < ApplicationController
+  include ActionController::Live
+
+  def stream
+    response.headers['Content-Type'] = 'text/event-stream'
+
+    counter = Rubyx.import('count')
+    Rubyx.stream(counter.count_up(5)).each do |msg|
+      response.stream.write("data: #{msg}\n\n")
+    end
+  ensure
+    response.stream.close
+  end
+end
+```
+
+### 3. Async — non-blocking Python calls
+
+```python
+# app/python/tasks.py
+import asyncio
+
+
+async def delayed_greet(name, seconds=1):
+    await asyncio.sleep(seconds)
+    return f"Hello, {name}! (after {seconds}s)"
+```
+
+```ruby
+class TasksController < ApplicationController
+  def show
+    tasks = Rubyx.import('tasks')
+
+    # Non-blocking — returns a Future immediately
+    future = Rubyx.async_await(tasks.delayed_greet(params[:name], seconds: 2))
+    do_other_work()
+    render json: { message: future.value.to_ruby }
+  end
+end
+```
+
+## Rails Setup Advanced LLM Example
 
 ```bash
 rails generate rubyx:install
@@ -126,10 +224,12 @@ import threading
 
 _model, _tokenizer = None, None
 
+
 def load_model(name="Qwen/Qwen2.5-0.5B-Instruct"):
     global _model, _tokenizer
     _tokenizer = AutoTokenizer.from_pretrained(name)
     _model = AutoModelForCausalLM.from_pretrained(name, torch_dtype="auto")
+
 
 def stream_generate(prompt, max_tokens=256):
     messages = [{"role": "user", "content": prompt}]
@@ -137,7 +237,8 @@ def stream_generate(prompt, max_tokens=256):
     inputs = _tokenizer([text], return_tensors="pt").to(_model.device)
     streamer = TextIteratorStreamer(_tokenizer, skip_prompt=True, skip_special_tokens=True)
 
-    thread = threading.Thread(target=_model.generate, kwargs={**inputs, "max_new_tokens": max_tokens, "streamer": streamer})
+    thread = threading.Thread(target=_model.generate,
+                              kwargs={**inputs, "max_new_tokens": max_tokens, "streamer": streamer})
     thread.start()
     for token in streamer:
         if token:
@@ -146,16 +247,22 @@ def stream_generate(prompt, max_tokens=256):
 ```
 
 ```ruby
-# config/initializers/rubyx.rb — load model once at boot
+# config/initializers/rubyx.rb
 Rubyx::Rails.configure do |config|
-  # ...
+  config.pyproject_path = Rails.root.join('pyproject.toml')
+  config.auto_init = true
+  config.python_paths = [Rails.root.join('app/python').to_s]
 end
-llm = Rubyx.import('services.llm')
-llm.load_model("Qwen/Qwen2.5-0.5B-Instruct")
+
+# Load models once at boot — must be inside after_initialize
+# so Python is already initialized by the Railtie
+Rails.application.config.after_initialize do
+  llm = Rubyx.import('services.llm')
+  llm.load_model("Qwen/Qwen2.5-0.5B-Instruct")
+end
 ```
 
 ```ruby
-
 class ChatController < ApplicationController
   include ActionController::Live
 
@@ -164,7 +271,8 @@ class ChatController < ApplicationController
     response.headers['Content-Type'] = 'text/event-stream'
 
     Rubyx.stream(llm.stream_generate(params[:prompt])).each do |token|
-      response.stream.write("data: #{token}\n\n")
+      token_str = token.to_s.gsub("\n", "\\n")
+      response.stream.write("data: #{token_str}\n\n")
     end
     response.stream.write("data: [DONE]\n\n")
   ensure
