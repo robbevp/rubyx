@@ -28,6 +28,8 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ruby-3.4
 
       - name: Set Ruby library path
         run: echo "LD_LIBRARY_PATH=$(ruby -e 'puts RbConfig::CONFIG["libdir"]'):$LD_LIBRARY_PATH" >> $GITHUB_ENV
@@ -58,6 +60,8 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ruby-3.4
 
       - name: Set Ruby library path
         run: echo "LD_LIBRARY_PATH=$(ruby -e 'puts RbConfig::CONFIG["libdir"]'):$LD_LIBRARY_PATH" >> $GITHUB_ENV
@@ -90,6 +94,8 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ruby-3.4
 
       - name: Set Ruby library path
         run: echo "LD_LIBRARY_PATH=$(ruby -e 'puts RbConfig::CONFIG["libdir"]'):$LD_LIBRARY_PATH" >> $GITHUB_ENV
