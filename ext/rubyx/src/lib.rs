@@ -4001,8 +4001,27 @@ mod tests {
     #[test]
     #[serial]
     fn test_rubyx_exception_class_maps_known_kinds() {
-        with_ruby_python(|_ruby, _api| {
+        with_ruby_python(|ruby, _api| {
             use crate::ruby_helpers::rubyx_exception_class;
+            use magnus::{Class, Module};
+
+            // Define Rubyx error classes (normally done by error.rb at gem load time).
+            // define_class needs RClass, so we eval to create exception subclasses.
+            ruby.eval::<magnus::Value>(
+                "
+                module Rubyx
+                  class Error < StandardError; end
+                  class PythonError < Error; end
+                  class KeyError < Error; end
+                  class IndexError < Error; end
+                  class ValueError < Error; end
+                  class TypeError < Error; end
+                  class AttributeError < Error; end
+                  class ImportError < PythonError; end
+                end
+            ",
+            )
+            .expect("should define error classes");
 
             let key_err = rubyx_exception_class("KeyError");
             let idx_err = rubyx_exception_class("IndexError");
@@ -4013,8 +4032,6 @@ mod tests {
             let mnf_err = rubyx_exception_class("ModuleNotFoundError");
             let unknown = rubyx_exception_class("ZeroDivisionError");
 
-            // Verify mapped types resolve to Rubyx:: classes, not RuntimeError
-            use magnus::Class;
             let class_name =
                 |c: magnus::ExceptionClass| -> String { unsafe { c.name().to_string() } };
 
@@ -4024,11 +4041,7 @@ mod tests {
             assert_eq!(class_name(typ_err), "Rubyx::TypeError");
             assert_eq!(class_name(attr_err), "Rubyx::AttributeError");
             assert_eq!(class_name(imp_err), "Rubyx::ImportError");
-
-            // ModuleNotFoundError maps to ImportError
             assert_eq!(class_name(mnf_err), "Rubyx::ImportError");
-
-            // Unmapped kinds fall back to PythonError
             assert_eq!(class_name(unknown), "Rubyx::PythonError");
         });
     }

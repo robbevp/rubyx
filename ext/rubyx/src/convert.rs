@@ -274,16 +274,6 @@ impl<K: FromPython + Eq + std::hash::Hash, V: FromPython> FromPython for HashMap
     }
 }
 
-/// Convert a dynamic Ruby Value to a Python object.
-/// Delegates to rubyx_object::ruby_to_python which handles all types.
-pub fn ruby_value_to_python(
-    val: magnus::Value,
-    api: &PythonApi,
-) -> Result<*mut PyObject, ConvertError> {
-    crate::rubyx_object::ruby_to_python(val, api)
-        .map_err(|e| ConvertError::PythonError(e.to_string()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

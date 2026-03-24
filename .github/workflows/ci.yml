@@ -48,7 +48,7 @@ jobs:
       - name: Install Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: '3.3'
+          ruby-version: '3.4'
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -72,7 +72,7 @@ jobs:
       - name: Install Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: '3.3'
+          ruby-version: '3.4'
 
       - name: Install Python
         uses: actions/setup-python@v5
@@ -88,5 +88,14 @@ jobs:
       - name: Set Ruby library path
         run: echo "LD_LIBRARY_PATH=$(ruby -e 'puts RbConfig::CONFIG["libdir"]'):$LD_LIBRARY_PATH" >> $GITHUB_ENV
 
-      - name: Run tests
+      - name: Run Rust tests
         run: cargo test
+
+      - name: Build release for Ruby specs
+        run: cargo build --release
+
+      - name: Install Ruby dependencies
+        run: bundle install
+
+      - name: Run Ruby specs
+        run: bundle exec rspec

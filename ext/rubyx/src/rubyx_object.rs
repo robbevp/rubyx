@@ -161,7 +161,7 @@ pub(crate) fn ruby_to_python(
             ));
         }
         for (i, item) in arr.into_iter().enumerate() {
-            let py_item = ruby_to_python(item, api).inspect_err(|e| {
+            let py_item = ruby_to_python(item, api).inspect_err(|_e| {
                 api.decref(py_list);
             })?;
             let result = api.list_set_item(py_list, i as isize, py_item);
