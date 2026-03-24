@@ -6,8 +6,8 @@
 
 Powered by Rust for safety and performance. Built for Rails.
 
-[![Gem Version](https://badge.fury.io/rb/rubyx-py.svg)](https://badge.fury.io/rb/rubyx-py)
-[![CI](https://github.com/yinho999/rubyx-py/actions/workflows/ci.yml/badge.svg)](https://github.com/yinho999/rubyx-py/actions/workflows/ci.yml)
+[![Gem Version](https://badge.fury.io/rb/rubyx.svg)](https://badge.fury.io/rb/rubyx)
+[![CI](https://github.com/yinho999/rubyx/actions/workflows/ci.yml/badge.svg)](https://github.com/yinho999/rubyx/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Ruby](https://img.shields.io/badge/Ruby-%3E%3D%203.0-red.svg)](https://www.ruby-lang.org)
 [![Rust](https://img.shields.io/badge/Rust-powered-orange.svg)](https://www.rust-lang.org)
