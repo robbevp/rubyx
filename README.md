@@ -88,17 +88,24 @@ dependencies = []
 ### 1. Sync — call a Python function
 
 ```python
-# app/python/hello.py
-def greet(name):
-    return f"Hello, {name}!"
+# app/python/example.py
+def hello(name="World"):
+    return f"Hello, {name}! From Python."
 ```
 
 ```ruby
+
 class GreetingsController < ApplicationController
-  def show
-    hello = Rubyx.import('hello')
-    render json: { message: hello.greet(params[:name]).to_ruby }
+  def index
+    example = Rubyx.import('example')
+    render json: { message: example.hello(params[:name]).to_ruby }
   end
+end
+```
+
+```ruby
+Rails.application.routes.draw do
+  root "greetings#index"
 end
 ```
 
@@ -112,6 +119,7 @@ def count_up(n):
 ```
 
 ```ruby
+
 class CountController < ApplicationController
   include ActionController::Live
 
@@ -141,6 +149,7 @@ async def delayed_greet(name, seconds=1):
 ```
 
 ```ruby
+
 class TasksController < ApplicationController
   def show
     tasks = Rubyx.import('tasks')
@@ -263,6 +272,7 @@ end
 ```
 
 ```ruby
+
 class ChatController < ApplicationController
   include ActionController::Live
 
