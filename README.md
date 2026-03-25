@@ -43,8 +43,10 @@ result = future.value # GVL released during wait, reacquired when ready
 
 - **`Rubyx.stream`** / **`Rubyx.nb_stream`** — release Ruby's GVL during iteration, other threads and Fibers keep
   running
-- **`Rubyx.async_await`** — spawns Python on background threads, returns a `Future` immediately; `future.value` releases the GVL while waiting, reacquires when ready
-- **`Rubyx.await`** — blocks until the coroutine completes, returns a `RubyxObject`
+- **`Rubyx.async_await`** — spawns Python on background threads, returns a `Future` immediately; `future.value` releases
+  the GVL while waiting, reacquires when ready
+- **`Rubyx.await`** — GVL released while waiting; returns native Ruby types for primitives, `RubyxObject` for complex
+  Python objects
 
 Ideal for LLM streaming, ML inference, data pipelines, and high-concurrency Rails apps.
 
@@ -390,7 +392,7 @@ ctx = Rubyx.context
 ctx.eval("import asyncio")
 ctx.eval("async def fetch(url): ...")
 
-# Blocking — waits for coroutine to complete
+# GVL released while waiting, reacquired when ready
 result = ctx.await("fetch(url)", url: "https://example.com")
 
 # Non-blocking (returns Future)
@@ -445,17 +447,17 @@ svc.Analyzer([1, 2, 3]).summary.to_ruby # => {"count" => 3, "sum" => 6}
 
 ## API Reference
 
-| Method                               | Description                     |
-|--------------------------------------|---------------------------------|
-| `Rubyx.uv_init(toml, **opts)`        | Setup Python env and initialize |
-| `Rubyx.import(name)`                 | Import a Python module          |
-| `Rubyx.eval(code, **globals)`        | Evaluate Python code            |
-| `Rubyx.await(code, **globals)`       | Run async code (blocking)       |
+| Method                               | Description                                   |
+|--------------------------------------|-----------------------------------------------|
+| `Rubyx.uv_init(toml, **opts)`        | Setup Python env and initialize               |
+| `Rubyx.import(name)`                 | Import a Python module                        |
+| `Rubyx.eval(code, **globals)`        | Evaluate Python code                          |
+| `Rubyx.await(code, **globals)`       | Run async code (GVL released while waiting)   |
 | `Rubyx.async_await(code, **globals)` | Run async code (non-blocking, returns Future) |
-| `Rubyx.stream(iterable)`             | Stream a Python generator       |
-| `Rubyx.nb_stream(iterable)`          | Non-blocking stream (GVL-aware) |
-| `Rubyx.context`                      | Create isolated Python context  |
-| `Rubyx.initialized?`                 | Check if Python is ready        |
+| `Rubyx.stream(iterable)`             | Stream a Python generator                     |
+| `Rubyx.nb_stream(iterable)`          | Non-blocking stream (GVL-aware)               |
+| `Rubyx.context`                      | Create isolated Python context                |
+| `Rubyx.initialized?`                 | Check if Python is ready                      |
 
 | RubyxObject              |                               |
 |--------------------------|-------------------------------|

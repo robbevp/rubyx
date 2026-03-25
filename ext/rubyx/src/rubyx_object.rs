@@ -91,7 +91,8 @@ pub(crate) fn python_to_sendable(
     if py_val == api.py_false {
         return Ok(SendableValue::Bool(false));
     }
-    Err("Cannot convert Python value to Ruby".to_string())
+    api.incref(py_val);
+    Ok(SendableValue::PyObjectRef(py_val as usize))
 }
 pub(crate) fn ruby_to_python(
     value: Value,
@@ -1927,5 +1928,80 @@ mod tests {
         assert_eq!(w.py_type().unwrap(), "module");
         drop(w);
         api.decref(os);
+    }
+
+    // ========== python_to_sendable: PyObjectRef fallback ==========
+
+    #[test]
+    #[serial]
+    fn test_python_to_sendable_module_returns_py_object_ref() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+        let os = api.import_module("os").expect("os should import");
+        let sendable = python_to_sendable(os, api).unwrap();
+        match &sendable {
+            SendableValue::PyObjectRef(addr) => {
+                assert_eq!(*addr, os as usize);
+            }
+            other => panic!("expected PyObjectRef, got {other:?}"),
+        }
+        // Clean up: decref once for the sendable's incref, once for import_module
+        api.decref(os);
+        api.decref(os);
+    }
+
+    #[test]
+    #[serial]
+    fn test_python_to_sendable_set_returns_py_object_ref() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+        // A Python set is not int/float/str/bool/list/tuple/dict, so it
+        // should fall through to PyObjectRef
+        let globals = api.dict_new();
+        let builtins = api.import_module("builtins").expect("builtins should import");
+        let key = api.string_from_str("__builtins__");
+        api.dict_set_item(globals, key, builtins);
+        api.decref(key);
+        let result = api.run_string("{1, 2, 3}", 258, globals, globals);
+        let py_set = result.expect("set eval should succeed");
+        assert!(!py_set.is_null());
+
+        let sendable = python_to_sendable(py_set, api).unwrap();
+        match &sendable {
+            SendableValue::PyObjectRef(addr) => {
+                assert_ne!(*addr, 0);
+            }
+            other => panic!("expected PyObjectRef for set, got {other:?}"),
+        }
+        api.decref(py_set);
+        api.decref(builtins);
+        api.decref(globals);
+    }
+
+    #[test]
+    #[serial]
+    fn test_python_to_sendable_primitives_not_py_object_ref() {
+        use crate::test_helpers::skip_if_no_python;
+        let Some(guard) = skip_if_no_python() else {
+            return;
+        };
+        let api = guard.api();
+
+        // int → Integer, not PyObjectRef
+        let py_int = api.long_from_i64(42);
+        assert!(matches!(python_to_sendable(py_int, api), Ok(SendableValue::Integer(42))));
+
+        // str → Str, not PyObjectRef
+        let py_str = api.string_from_str("hello");
+        assert!(matches!(python_to_sendable(py_str, api), Ok(SendableValue::Str(_))));
+
+        // None → Nil, not PyObjectRef
+        assert!(matches!(python_to_sendable(api.py_none, api), Ok(SendableValue::Nil)));
     }
 }

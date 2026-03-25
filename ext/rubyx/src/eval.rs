@@ -1,3 +1,4 @@
+use crate::future::RubyxFuture;
 use crate::python_api::PythonApi;
 use crate::python_ffi::PyObject;
 use crate::python_guard::PyGuard;
@@ -234,55 +235,6 @@ fn inject_globals(
     Ok(())
 }
 
-/// Run a Python coroutine with asyncio.run() and return the result.
-/// The coroutine must already be a PyObject (not code string).
-/// Caller must hold the GIL.
-fn run_asyncio(coroutine: *mut PyObject, api: &'static PythonApi) -> Result<Value, magnus::Error> {
-    let ruby = Ruby::get().map_err(|e| Error::new(runtime_error(), e.to_string()))?;
-
-    let asyncio = api
-        .import_module("asyncio")
-        .map_err(|e| Error::new(runtime_error(), e.to_string()))?;
-    let run_fn = api.object_get_attr_string(asyncio, "run");
-
-    if run_fn.is_null() {
-        api.clear_error();
-        api.decref(asyncio);
-        return Err(Error::new(runtime_error(), "asyncio.run not found"));
-    }
-
-    let args = unsafe { (api.py_tuple_new)(1) };
-    if args.is_null() {
-        api.decref(run_fn);
-        api.decref(asyncio);
-        return Err(Error::new(
-            runtime_error(),
-            "Failed to allocate argument tuple",
-        ));
-    }
-    api.incref(coroutine);
-    unsafe { (api.py_tuple_set_item)(args, 0, coroutine) };
-
-    let result = api.object_call(run_fn, args, std::ptr::null_mut());
-    api.decref(args);
-    api.decref(run_fn);
-    api.decref(asyncio);
-
-    if result.is_null() {
-        let err = if let Some(exc) = PythonApi::extract_exception(api) {
-            exc.to_string()
-        } else {
-            "Python async call failed".to_string()
-        };
-        return Err(Error::new(runtime_error(), err));
-    }
-
-    let wrapper = RubyxObject::new(result, api)
-        .ok_or_else(|| Error::new(runtime_error(), "Failed to wrap async result"))?;
-
-    Ok(wrapper.into_value_with(&ruby))
-}
-
 /// Rubyx.await(coroutine) — takes a RubyxObject wrapping a Python coroutine,
 /// runs it with asyncio.run(), and returns the result.
 pub(crate) fn rubyx_await(coroutine: Value) -> Result<Value, magnus::Error> {
@@ -290,10 +242,10 @@ pub(crate) fn rubyx_await(coroutine: Value) -> Result<Value, magnus::Error> {
     let api = crate::api();
     let gil = api.ensure_gil();
 
-    let result = run_asyncio(obj.as_ptr(), api);
+    let future = RubyxFuture::from_coroutine(obj.as_ptr(), api);
 
     api.release_gil(gil);
-    result
+    future.value()
 }
 
 /// Eval code in context globals to get a coroutine, then run it with asyncio.run().
@@ -302,7 +254,7 @@ pub(crate) fn await_eval_with_globals(
     code: &str,
     globals: *mut PyObject,
     api: &'static PythonApi,
-) -> Result<Value, magnus::Error> {
+) -> Result<RubyxFuture, magnus::Error> {
     let py_coroutine = match api.run_string(code, PY_EVAL_INPUT, globals, globals) {
         Ok(obj) if !obj.is_null() => obj,
         Ok(_) => {
@@ -315,12 +267,12 @@ pub(crate) fn await_eval_with_globals(
             };
             return Err(err);
         }
-        Err(e) => return Err(Error::new(runtime_error(), e)),
+        Err(e) => {
+            return Err(magnus::Error::new(runtime_error(), e));
+        }
     };
-
-    let result = run_asyncio(py_coroutine, api);
-    api.decref(py_coroutine);
-    result
+    let future = RubyxFuture::from_coroutine(py_coroutine, api);
+    Ok(future)
 }
 
 pub(crate) fn rubyx_await_with_globals(
@@ -331,14 +283,16 @@ pub(crate) fn rubyx_await_with_globals(
     let gil = api.ensure_gil();
 
     let globals = make_globals(api);
-    let result = match inject_globals(&globals, globals_hash, api) {
+    let future = match inject_globals(&globals, globals_hash, api) {
         Ok(()) => await_eval_with_globals(&code, globals.ptr(), api),
         Err(e) => Err(e),
     };
     drop(globals);
-
     api.release_gil(gil);
-    result
+    match future {
+        Ok(future) => Ok(future.value()?),
+        Err(e) => Err(e),
+    }
 }
 
 pub(crate) fn rubyx_async_await_with_globals(

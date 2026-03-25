@@ -3203,9 +3203,7 @@ mod tests {
             let result =
                 crate::eval::rubyx_await(coro_value).expect("blocking await should succeed");
 
-            let obj = magnus::typed_data::Obj::<RubyxObject>::try_convert(result)
-                .expect("should be RubyxObject");
-            assert_eq!(api.long_to_i64(obj.as_ptr()), 99);
+            assert_eq!(i64::try_convert(result).unwrap(), 99);
 
             api.decref(globals);
         });
@@ -3224,12 +3222,16 @@ mod tests {
             )
             .expect("should define async function");
 
-            let result = crate::eval::await_eval_with_globals("double(21)", globals, api)
+            let future = crate::eval::await_eval_with_globals("double(21)", globals, api)
                 .expect("await_eval should succeed");
 
-            let obj = magnus::typed_data::Obj::<RubyxObject>::try_convert(result)
-                .expect("should be RubyxObject");
-            assert_eq!(api.long_to_i64(obj.as_ptr()), 42);
+            // Release GIL so background thread can run asyncio
+            let tstate = api.save_thread();
+            let result = future.value().expect("future should resolve");
+            drop(future);
+            api.restore_thread(tstate);
+
+            assert_eq!(i64::try_convert(result).unwrap(), 42);
 
             api.decref(globals);
         });
@@ -3248,8 +3250,17 @@ mod tests {
             )
             .expect("should define async function");
 
-            let result = crate::eval::await_eval_with_globals("fail()", globals, api);
-            assert!(result.is_err(), "should propagate error");
+            let future_result = crate::eval::await_eval_with_globals("fail()", globals, api);
+            match future_result {
+                Err(_) => {} // eval itself failed — error propagated
+                Ok(future) => {
+                    // Eval succeeded but asyncio.run should fail
+                    let tstate = api.save_thread();
+                    let result = future.value();
+                    api.restore_thread(tstate);
+                    assert!(result.is_err(), "should propagate error");
+                }
+            }
 
             api.decref(globals);
         });
@@ -3431,10 +3442,15 @@ mod tests {
             api.decref(py_a);
             api.decref(py_b);
 
-            let result = crate::eval::await_eval_with_globals("multiply(a, b)", globals, api)
+            let future = crate::eval::await_eval_with_globals("multiply(a, b)", globals, api)
                 .expect("await should succeed");
-            let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
-            assert_eq!(api.long_to_i64(obj.as_ptr()), 42);
+
+            let tstate = api.save_thread();
+            let result = future.value().expect("future should resolve");
+            drop(future);
+            api.restore_thread(tstate);
+
+            assert_eq!(i64::try_convert(result).unwrap(), 42);
 
             api.decref(globals);
         });
@@ -3461,13 +3477,16 @@ mod tests {
             api.decref(key);
             api.decref(py_who);
 
-            let result = crate::eval::await_eval_with_globals("greet(who)", globals, api)
+            let future = crate::eval::await_eval_with_globals("greet(who)", globals, api)
                 .expect("await should succeed");
-            let obj = Obj::<RubyxObject>::try_convert(result).expect("should be RubyxObject");
-            assert_eq!(
-                api.string_to_string(obj.as_ptr()),
-                Some("hi world".to_string())
-            );
+
+            let tstate = api.save_thread();
+            let result = future.value().expect("future should resolve");
+            drop(future);
+            api.restore_thread(tstate);
+
+            let s: String = TryConvert::try_convert(result).unwrap();
+            assert_eq!(s, "hi world");
 
             api.decref(globals);
         });
@@ -3494,8 +3513,16 @@ mod tests {
             api.decref(key);
             api.decref(py_val);
 
-            let result = crate::eval::await_eval_with_globals("check(val)", globals, api);
-            assert!(result.is_err(), "should propagate ValueError");
+            let future_result = crate::eval::await_eval_with_globals("check(val)", globals, api);
+            match future_result {
+                Err(_) => {} // eval itself failed
+                Ok(future) => {
+                    let tstate = api.save_thread();
+                    let result = future.value();
+                    api.restore_thread(tstate);
+                    assert!(result.is_err(), "should propagate ValueError");
+                }
+            }
 
             api.decref(globals);
         });

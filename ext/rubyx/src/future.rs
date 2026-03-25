@@ -570,4 +570,53 @@ mod tests {
             "worker should have completed before drop returned"
         );
     }
+
+    // ========== PyObjectRef: future.value() returns RubyxObject ==========
+
+    #[test]
+    #[serial]
+    fn test_value_returns_rubyx_object_for_py_object_ref() {
+        with_ruby_python(|_ruby, api| {
+            let os = api.import_module("os").expect("os should import");
+            api.incref(os); // incref for PyObjectRef
+
+            let (tx, rx) = bounded(1);
+            tx.send(Ok(SendableValue::PyObjectRef(os as usize)))
+                .unwrap();
+
+            let future = make_future(rx);
+            let val = future.value().unwrap();
+
+            // Should be a RubyxObject, not a primitive
+            assert!(!val.is_nil());
+            assert!(i64::try_convert(val).is_err(), "should not be Integer");
+            assert!(String::try_convert(val).is_err(), "should not be String");
+
+            api.decref(os);
+        });
+    }
+
+    #[test]
+    fn test_future_recv_cb_delivers_py_object_ref() {
+        let (tx, rx) = unbounded();
+        // Use a fake address — we're just testing the callback delivers it through
+        let fake_addr = 0xDEADBEEFusize;
+        tx.send(Ok(SendableValue::PyObjectRef(fake_addr))).unwrap();
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut args = FutureRecvArgs {
+            receiver: rx,
+            result: None,
+            cancel,
+        };
+
+        unsafe {
+            future_recv_cb(&mut args as *mut FutureRecvArgs as *mut c_void);
+        }
+
+        match args.result.unwrap().unwrap() {
+            Ok(SendableValue::PyObjectRef(addr)) => assert_eq!(addr, fake_addr),
+            other => panic!("expected PyObjectRef(0xDEADBEEF), got {other:?}"),
+        }
+    }
 }

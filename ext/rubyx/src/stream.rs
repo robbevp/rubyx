@@ -1,7 +1,7 @@
 use crate::api;
 use crate::python_ffi::PyObject;
 use crate::ruby_helpers::runtime_error;
-use crate::rubyx_object::python_to_sendable;
+use crate::rubyx_object::{python_to_sendable, RubyxObject};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use magnus::value::ReprValue;
 use magnus::{IntoValue, Value};
@@ -23,6 +23,7 @@ pub(crate) enum SendableValue {
     Bool(bool),
     List(Vec<SendableValue>),
     Dict(Vec<(SendableValue, SendableValue)>),
+    PyObjectRef(usize),
 }
 impl TryInto<magnus::Value> for SendableValue {
     type Error = magnus::Error;
@@ -53,6 +54,15 @@ impl TryInto<magnus::Value> for SendableValue {
                     hash.aset(key, val)?;
                 }
                 hash.as_value()
+            }
+            SendableValue::PyObjectRef(addr) => {
+                let py_obj = addr as *mut PyObject;
+                let api = crate::api();
+                RubyxObject::new(py_obj, api)
+                    .map(|obj| obj.into_value_with(&ruby))
+                    .ok_or_else(|| {
+                        magnus::Error::new(runtime_error(), "Failed to wrap Python object")
+                    })?
             }
         };
         Ok(result)
@@ -708,6 +718,65 @@ mod tests {
             }
             assert_eq!(count, 1000);
             assert_eq!(sum, (0..1000i64).sum::<i64>());
+        });
+    }
+
+    // ========== PyObjectRef: SendableValue → RubyxObject ==========
+
+    #[test]
+    #[serial]
+    fn test_py_object_ref_converts_to_rubyx_object() {
+        with_ruby_python(|_ruby, api| {
+            let os = api.import_module("os").expect("os should import");
+            api.incref(os); // incref for PyObjectRef (simulates what python_to_sendable does)
+            let sendable = SendableValue::PyObjectRef(os as usize);
+
+            let val: Value = sendable.try_into().expect("PyObjectRef should convert");
+            // The result should be a RubyxObject, not a primitive
+            assert!(!val.is_nil());
+            // Verify it's not a primitive type
+            assert!(i64::try_convert(val).is_err(), "should not be an Integer");
+            assert!(String::try_convert(val).is_err(), "should not be a String");
+
+            api.decref(os); // balance the import_module refcount
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_py_object_ref_in_stream() {
+        with_ruby_python(|_ruby, api| {
+            let os = api.import_module("os").expect("os should import");
+            api.incref(os);
+
+            let (tx, rx) = unbounded();
+            let (cancel_tx, _cancel_rx) = bounded(1);
+            let addr = os as usize;
+
+            thread::spawn(move || {
+                tx.send(Some(SendableValue::Integer(1))).ok();
+                tx.send(Some(SendableValue::PyObjectRef(addr))).ok();
+                tx.send(Some(SendableValue::Str("after".to_string()))).ok();
+                tx.send(None).ok();
+            });
+
+            let mut stream = AsyncStream::from_channel(rx, cancel_tx);
+
+            // First: integer
+            let val = stream.next().unwrap().unwrap();
+            assert_eq!(i64::try_convert(val).unwrap(), 1);
+
+            // Second: PyObjectRef → RubyxObject
+            let val = stream.next().unwrap().unwrap();
+            assert!(!val.is_nil());
+            assert!(i64::try_convert(val).is_err(), "should be RubyxObject, not Integer");
+
+            // Third: string
+            let val = stream.next().unwrap().unwrap();
+            assert_eq!(String::try_convert(val).unwrap(), "after");
+
+            assert!(stream.next().is_none());
+            api.decref(os);
         });
     }
 }

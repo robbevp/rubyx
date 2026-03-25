@@ -159,8 +159,7 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       ctx.eval("async def blocking_ctx(): return 77")
 
       result = ctx.await("blocking_ctx()")
-      expect(result).to be_a(RubyxObject)
-      expect(result.to_ruby).to eq(77)
+      expect(result).to eq(77)
     end
 
     it 'has access to context state' do
@@ -170,17 +169,16 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       ctx.eval("async def get_val(): return val")
 
       result = ctx.await("get_val()")
-      expect(result.to_ruby).to eq('hello')
+      expect(result).to eq('hello')
     end
 
-    it 'returns RubyxObject for complex types' do
+    it 'returns native Hash for dict' do
       ctx = Rubyx.context
       ctx.eval("import asyncio")
       ctx.eval("async def get_dict(): return {'a': 1, 'b': 2}")
 
       result = ctx.await("get_dict()")
-      expect(result).to be_a(RubyxObject)
-      expect(result.to_ruby).to eq({ 'a' => 1, 'b' => 2 })
+      expect(result).to eq({ 'a' => 1, 'b' => 2 })
     end
 
     it 'propagates errors' do
@@ -197,32 +195,31 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       ctx.eval("async def delayed(): await asyncio.sleep(0.01); return 'done'")
 
       result = ctx.await("delayed()")
-      expect(result.to_ruby).to eq('done')
+      expect(result).to eq('done')
     end
   end
 
   # ========== Rubyx.await (blocking standalone) ==========
 
   describe 'Rubyx.await (blocking)' do
-    it 'blocks and returns RubyxObject' do
+    it 'blocks and returns native value' do
       ctx = Rubyx.context
       ctx.eval("import asyncio")
       ctx.eval("async def blocking_test(): return 99")
       coro = ctx.eval("blocking_test()")
 
       result = Rubyx.await(coro)
-      expect(result).to be_a(RubyxObject)
-      expect(result.to_ruby).to eq(99)
+      expect(result).to eq(99)
     end
 
-    it 'returns RubyxObject for string result' do
+    it 'returns string result' do
       ctx = Rubyx.context
       ctx.eval("import asyncio")
       ctx.eval("async def get_str(): return 'awaited'")
       coro = ctx.eval("get_str()")
 
       result = Rubyx.await(coro)
-      expect(result.to_s).to eq('awaited')
+      expect(result).to eq('awaited')
     end
 
     it 'propagates errors' do
@@ -241,7 +238,7 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       coro = ctx.eval("nothing()")
 
       result = Rubyx.await(coro)
-      expect(result.to_s).to eq('None')
+      expect(result).to be_nil
     end
   end
 
@@ -359,13 +356,13 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       future.value
     end
 
-    it 'Rubyx.await returns RubyxObject (not Future)' do
+    it 'Rubyx.await returns native value (not Future)' do
       ctx = Rubyx.context
       ctx.eval("import asyncio")
       ctx.eval("async def id_test3(): return 3")
       coro = ctx.eval("id_test3()")
       result = Rubyx.await(coro)
-      expect(result).to be_a(RubyxObject)
+      expect(result).to eq(3)
       expect(result).not_to be_a(Rubyx::Future)
     end
   end
@@ -377,14 +374,14 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       ctx = Rubyx.context
       ctx.eval("import asyncio\nasync def mul(a, b): return a * b")
       result = ctx.await('mul(a, b)', a: 6, b: 7)
-      expect(result.to_ruby).to eq(42)
+      expect(result).to eq(42)
     end
 
     it 'awaits with string globals' do
       ctx = Rubyx.context
       ctx.eval("import asyncio\nasync def greet(n): return f'hi {n}'")
       result = ctx.await('greet(name)', name: 'world')
-      expect(result.to_ruby).to eq('hi world')
+      expect(result).to eq('hi world')
     end
 
     it 'propagates errors with globals' do
@@ -442,7 +439,7 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       ctx.eval("import asyncio\nasync def get99(): return 99")
       coro = ctx.eval("get99()")
       result = Rubyx.await(coro)
-      expect(result.to_ruby).to eq(99)
+      expect(result).to eq(99)
     end
 
     it 'Rubyx.async_await works with coroutine object (no globals)' do
@@ -451,6 +448,72 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       coro = ctx.eval("get77()")
       future = Rubyx.async_await(coro)
       expect(future.value).to eq(77)
+    end
+  end
+
+  # ========== Complex objects via PyObjectRef ==========
+
+  describe 'Rubyx.await with complex objects' do
+    it 'returns RubyxObject for non-primitive Python objects' do
+      ctx = Rubyx.context
+      ctx.eval("import asyncio")
+      ctx.eval("async def get_set(): return {1, 2, 3}")
+      coro = ctx.eval("get_set()")
+
+      result = Rubyx.await(coro)
+      expect(result).to be_a(RubyxObject)
+      expect(result.py_type).to eq('set')
+    end
+
+    it 'returns RubyxObject for custom class instances' do
+      ctx = Rubyx.context
+      ctx.eval("import asyncio")
+      ctx.eval("class Foo:\n    def __init__(self, x):\n        self.x = x")
+      ctx.eval("async def make_foo(): return Foo(42)")
+      coro = ctx.eval("make_foo()")
+
+      result = Rubyx.await(coro)
+      expect(result).to be_a(RubyxObject)
+      expect(result.x.to_ruby).to eq(42)
+    end
+
+    it 'returns native Ruby types for primitives' do
+      ctx = Rubyx.context
+      ctx.eval("import asyncio")
+
+      ctx.eval("async def get_int(): return 42")
+      expect(Rubyx.await(ctx.eval("get_int()"))).to eq(42)
+
+      ctx.eval("async def get_str(): return 'hello'")
+      expect(Rubyx.await(ctx.eval("get_str()"))).to eq('hello')
+
+      ctx.eval("async def get_float(): return 3.14")
+      expect(Rubyx.await(ctx.eval("get_float()"))).to be_within(0.001).of(3.14)
+
+      ctx.eval("async def get_bool(): return True")
+      expect(Rubyx.await(ctx.eval("get_bool()"))).to eq(true)
+
+      ctx.eval("async def get_none(): return None")
+      expect(Rubyx.await(ctx.eval("get_none()"))).to be_nil
+
+      ctx.eval("async def get_list(): return [1, 2, 3]")
+      expect(Rubyx.await(ctx.eval("get_list()"))).to eq([1, 2, 3])
+
+      ctx.eval("async def get_dict(): return {'a': 1}")
+      expect(Rubyx.await(ctx.eval("get_dict()"))).to eq({'a' => 1})
+    end
+  end
+
+  describe 'future.value with complex objects' do
+    it 'returns RubyxObject for non-primitive Python objects' do
+      ctx = Rubyx.context
+      ctx.eval("import asyncio")
+      ctx.eval("async def get_module(): import os; return os")
+
+      future = ctx.async_await("get_module()")
+      result = future.value
+      expect(result).to be_a(RubyxObject)
+      expect(result.py_type).to eq('module')
     end
   end
 end

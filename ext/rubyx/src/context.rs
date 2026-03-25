@@ -50,9 +50,12 @@ impl RubyxContext {
 
     pub(crate) fn await_eval(&self, code: String) -> Result<magnus::Value, magnus::Error> {
         let gil = self.api.ensure_gil();
-        let result = await_eval_with_globals(&code, self.globals, self.api);
+        let future = await_eval_with_globals(&code, self.globals, self.api);
         self.api.release_gil(gil);
-        result
+        match future {
+            Ok(value) => Ok(value.value()?),
+            Err(e) => Err(e),
+        }
     }
 
     pub(crate) fn await_eval_with_globals(
@@ -61,12 +64,15 @@ impl RubyxContext {
         globals_hash: RHash,
     ) -> Result<magnus::Value, magnus::Error> {
         let gil = self.api.ensure_gil();
-        let result = match self.inject_globals(globals_hash) {
+        let future = match self.inject_globals(globals_hash) {
             Ok(()) => await_eval_with_globals(&code, self.globals, self.api),
             Err(e) => Err(e),
         };
         self.api.release_gil(gil);
-        result
+        match future {
+            Ok(value) => Ok(value.value()?),
+            Err(e) => Err(e),
+        }
     }
 
     /// Eval code to get a coroutine, then run it on a background thread.
@@ -696,7 +702,7 @@ mod tests {
     fn test_context_await_with_globals() {
         use crate::test_helpers::with_ruby_python;
         use magnus::{IntoValue, TryConvert};
-        with_ruby_python(|ruby, api| {
+        with_ruby_python(|ruby, _api| {
             let ctx = super::RubyxContext::new().expect("context should create");
 
             // Define async function in context
@@ -713,10 +719,7 @@ mod tests {
                 .await_eval_with_globals("multiply(a, b)".to_string(), hash)
                 .expect("await should succeed");
 
-            let obj =
-                magnus::typed_data::Obj::<crate::rubyx_object::RubyxObject>::try_convert(result)
-                    .expect("should be RubyxObject");
-            assert_eq!(api.long_to_i64(obj.as_ptr()), 42);
+            assert_eq!(i64::try_convert(result).unwrap(), 42);
         });
     }
 

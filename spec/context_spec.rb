@@ -366,7 +366,7 @@ RSpec.describe 'Rubyx::Context', ruby_integration: true do
       ctx = Rubyx::Context.new
       ctx.eval("import asyncio\nasync def multiply(a, b): return a * b")
       result = ctx.await('multiply(a, b)', a: 6, b: 7)
-      expect(result.to_ruby).to eq(42)
+      expect(result).to eq(42)
     end
 
     it 'injected globals persist after await' do
