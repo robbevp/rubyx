@@ -3201,8 +3201,12 @@ mod tests {
 
             let wrapper = RubyxObject::new(coroutine, api).expect("should wrap coroutine");
             let coro_value: magnus::Value = magnus::IntoValue::into_value_with(wrapper, ruby);
+
+            // Release GIL so the background thread in rubyx_await can acquire it
+            let tstate = api.save_thread();
             let result =
                 crate::eval::rubyx_await(coro_value).expect("blocking await should succeed");
+            api.restore_thread(tstate);
 
             assert_eq!(i64::try_convert(result).unwrap(), 99);
 

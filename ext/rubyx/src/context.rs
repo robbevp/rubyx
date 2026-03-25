@@ -702,7 +702,7 @@ mod tests {
     fn test_context_await_with_globals() {
         use crate::test_helpers::with_ruby_python;
         use magnus::{IntoValue, TryConvert};
-        with_ruby_python(|ruby, _api| {
+        with_ruby_python(|ruby, api| {
             let ctx = super::RubyxContext::new().expect("context should create");
 
             // Define async function in context
@@ -715,9 +715,12 @@ mod tests {
             hash.aset(ruby.sym_new("b"), 7_i64.into_value_with(ruby))
                 .unwrap();
 
+            // Release GIL so the background thread in ctx.await can acquire it
+            let tstate = api.save_thread();
             let result = ctx
                 .await_eval_with_globals("multiply(a, b)".to_string(), hash)
                 .expect("await should succeed");
+            api.restore_thread(tstate);
 
             assert_eq!(i64::try_convert(result).unwrap(), 42);
         });
@@ -728,7 +731,7 @@ mod tests {
     fn test_context_await_with_globals_error() {
         use crate::test_helpers::with_ruby_python;
         use magnus::IntoValue;
-        with_ruby_python(|ruby, _api| {
+        with_ruby_python(|ruby, api| {
             let ctx = super::RubyxContext::new().expect("context should create");
 
             ctx.eval(
@@ -741,7 +744,10 @@ mod tests {
             hash.aset(ruby.sym_new("n"), (-5_i64).into_value_with(ruby))
                 .unwrap();
 
+            // Release GIL so the background thread can acquire it
+            let tstate = api.save_thread();
             let result = ctx.await_eval_with_globals("fail_if_neg(n)".to_string(), hash);
+            api.restore_thread(tstate);
             assert!(result.is_err(), "should propagate ValueError");
         });
     }
