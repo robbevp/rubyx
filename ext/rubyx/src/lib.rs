@@ -156,7 +156,8 @@ fn init(ruby: &magnus::Ruby) -> Result<(), magnus::Error> {
 
     // Rubyx::Future class
     let future_class = rubyx_module.define_class("Future", ruby.class_object())?;
-    future_class.define_method("value", method!(crate::future::RubyxFuture::value, 0))?;
+    // value() instead of await since await is a reserved keyword
+    future_class.define_method("await", method!(crate::future::RubyxFuture::value, 0))?;
     future_class.define_method("ready?", method!(crate::future::RubyxFuture::is_ready, 0))?;
 
     Ok(())

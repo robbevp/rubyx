@@ -392,14 +392,14 @@ RSpec.describe 'Rubyx::Context', ruby_integration: true do
       ctx.eval("import asyncio\nasync def add(x, y): return x + y")
       future = ctx.async_await('add(x, y)', x: 15, y: 27)
       expect(future).to be_a(Rubyx::Future)
-      expect(future.value).to eq(42)
+      expect(future.await).to eq(42)
     end
 
     it 'injected globals persist after async_await' do
       ctx = Rubyx::Context.new
       ctx.eval("import asyncio\nasync def identity(v): return v")
       future = ctx.async_await('identity(val)', val: 'hello')
-      future.value
+      future.await
       result = ctx.eval('val')
       expect(result.to_ruby).to eq('hello')
     end
@@ -408,7 +408,7 @@ RSpec.describe 'Rubyx::Context', ruby_integration: true do
       ctx = Rubyx::Context.new
       ctx.eval("import asyncio\nasync def div(a, b): return a / b")
       future = ctx.async_await('div(a, b)', a: 10, b: 0)
-      expect { future.value }.to raise_error(StandardError, /division by zero|ZeroDivisionError/)
+      expect { future.await }.to raise_error(StandardError, /division by zero|ZeroDivisionError/)
     end
   end
 end

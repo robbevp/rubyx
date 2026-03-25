@@ -1964,7 +1964,9 @@ mod tests {
         // A Python set is not int/float/str/bool/list/tuple/dict, so it
         // should fall through to PyObjectRef
         let globals = api.dict_new();
-        let builtins = api.import_module("builtins").expect("builtins should import");
+        let builtins = api
+            .import_module("builtins")
+            .expect("builtins should import");
         let key = api.string_from_str("__builtins__");
         api.dict_set_item(globals, key, builtins);
         api.decref(key);
@@ -1995,13 +1997,22 @@ mod tests {
 
         // int → Integer, not PyObjectRef
         let py_int = api.long_from_i64(42);
-        assert!(matches!(python_to_sendable(py_int, api), Ok(SendableValue::Integer(42))));
+        assert!(matches!(
+            python_to_sendable(py_int, api),
+            Ok(SendableValue::Integer(42))
+        ));
 
         // str → Str, not PyObjectRef
         let py_str = api.string_from_str("hello");
-        assert!(matches!(python_to_sendable(py_str, api), Ok(SendableValue::Str(_))));
+        assert!(matches!(
+            python_to_sendable(py_str, api),
+            Ok(SendableValue::Str(_))
+        ));
 
         // None → Nil, not PyObjectRef
-        assert!(matches!(python_to_sendable(api.py_none, api), Ok(SendableValue::Nil)));
+        assert!(matches!(
+            python_to_sendable(api.py_none, api),
+            Ok(SendableValue::Nil)
+        ));
     }
 }

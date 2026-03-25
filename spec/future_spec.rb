@@ -11,7 +11,7 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       coro = ctx.eval("simple()")
       future = Rubyx.async_await(coro)
       expect(future).to be_a(Rubyx::Future)
-      future.value # consume to clean up thread
+      future.await # consume to clean up thread
     end
 
     it 'runs the coroutine on a background thread' do
@@ -25,7 +25,7 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       # Ruby is not blocked — we can do work here
       ruby_work_done = true
 
-      result = future.value
+      result = future.await
       expect(ruby_work_done).to be true
       expect(result).to eq(7)
     end
@@ -37,7 +37,7 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       coro = ctx.eval("get_msg()")
 
       future = Rubyx.async_await(coro)
-      expect(future.value).to eq('hello from async')
+      expect(future.await).to eq('hello from async')
     end
 
     it 'handles async function returning a list' do
@@ -47,7 +47,7 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       coro = ctx.eval("get_list()")
 
       future = Rubyx.async_await(coro)
-      expect(future.value).to eq([1, 2, 3])
+      expect(future.await).to eq([1, 2, 3])
     end
 
     it 'handles async function returning a dict' do
@@ -57,7 +57,7 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       coro = ctx.eval("get_dict()")
 
       future = Rubyx.async_await(coro)
-      expect(future.value).to eq({ 'key' => 'value' })
+      expect(future.await).to eq({ 'key' => 'value' })
     end
 
     it 'handles async function returning None' do
@@ -67,7 +67,7 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       coro = ctx.eval("noop()")
 
       future = Rubyx.async_await(coro)
-      expect(future.value).to be_nil
+      expect(future.await).to be_nil
     end
 
     it 'propagates async errors' do
@@ -77,7 +77,7 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       coro = ctx.eval("boom()")
 
       future = Rubyx.async_await(coro)
-      expect { future.value }.to raise_error(RuntimeError, /async error/)
+      expect { future.await }.to raise_error(RuntimeError, /async error/)
     end
   end
 
@@ -94,7 +94,7 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       # Might be false if checked immediately (race condition, but likely)
       # Just verify it doesn't raise
       expect(future.ready?).to be(true).or be(false)
-      future.value # clean up
+      future.await # clean up
     end
 
     it 'returns true after completion' do
@@ -104,9 +104,9 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       coro = ctx.eval("fast()")
 
       future = Rubyx.async_await(coro)
-      future.value # wait for completion
+      future.await # wait for completion
 
-      # After value is consumed, ready? behavior is implementation-defined
+      # After await is consumed, ready? behavior is implementation-defined
       # Just verify it doesn't crash
       expect { future.ready? }.not_to raise_error
     end
@@ -122,7 +122,7 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
 
       future = ctx.async_await("double(21)")
       expect(future).to be_a(Rubyx::Future)
-      expect(future.value).to eq(42)
+      expect(future.await).to eq(42)
     end
 
     it 'has access to context state' do
@@ -132,7 +132,7 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       ctx.eval("async def get_x(): return x")
 
       future = ctx.async_await("get_x()")
-      expect(future.value).to eq(10)
+      expect(future.await).to eq(10)
     end
 
     it 'propagates errors from async code' do
@@ -141,7 +141,7 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       ctx.eval("async def fail(): raise RuntimeError('context async error')")
 
       future = ctx.async_await("fail()")
-      expect { future.value }.to raise_error(RuntimeError, /context async error/)
+      expect { future.await }.to raise_error(RuntimeError, /context async error/)
     end
 
     it 'raises on invalid Python code' do
@@ -249,16 +249,16 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       expect { Rubyx.async_await("not a python object") }.to raise_error(Exception)
     end
 
-    it 'future.value can only be consumed once' do
+    it 'future.await can only be consumed once' do
       ctx = Rubyx.context
       ctx.eval("import asyncio")
       ctx.eval("async def once(): return 1")
       coro = ctx.eval("once()")
 
       future = Rubyx.async_await(coro)
-      expect(future.value).to eq(1)
+      expect(future.await).to eq(1)
       # Second call should fail
-      expect { future.value }.to raise_error(RuntimeError)
+      expect { future.await }.to raise_error(RuntimeError)
     end
   end
 
@@ -271,10 +271,10 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       ctx.eval("async def add(a, b): await asyncio.sleep(0.01); return a + b")
 
       f1 = ctx.async_await("add(1, 2)")
-      expect(f1.value).to eq(3)
+      expect(f1.await).to eq(3)
 
       f2 = ctx.async_await("add(3, 4)")
-      expect(f2.value).to eq(7)
+      expect(f2.await).to eq(7)
     end
 
     it 'Ruby threads can run while future executes' do
@@ -291,23 +291,23 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
         sleep(0.01)
       end
 
-      expect(future.value).to eq(42)
+      expect(future.await).to eq(42)
       # Counter should be > 0 if Ruby was doing work
       # (might be 0 on very fast machines, so don't assert)
     end
   end
 
-  # ========== GVL release during value() ==========
+  # ========== GVL release during await ==========
 
-  describe 'GVL release during value()' do
-    it 'other Ruby threads run while value() blocks' do
+  describe 'GVL release during await' do
+    it 'other Ruby threads run while await blocks' do
       ctx = Rubyx.context
       ctx.eval("import asyncio")
       ctx.eval("async def slow_result(): await asyncio.sleep(0.3); return 'done'")
 
       future = ctx.async_await("slow_result()")
 
-      # Start a Ruby thread that increments a counter while future.value blocks
+      # Start a Ruby thread that increments a counter while future.await blocks
       counter = 0
       mutex = Mutex.new
       done = false
@@ -319,7 +319,7 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
         end
       end
 
-      result = future.value
+      result = future.await
       done = true
       worker.join
 
@@ -344,7 +344,7 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       coro = ctx.eval("id_test()")
       future = Rubyx.async_await(coro)
       expect(future).to be_a(Rubyx::Future)
-      future.value
+      future.await
     end
 
     it 'ctx.async_await returns Rubyx::Future' do
@@ -353,7 +353,7 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       ctx.eval("async def id_test2(): return 2")
       future = ctx.async_await("id_test2()")
       expect(future).to be_a(Rubyx::Future)
-      future.value
+      future.await
     end
 
     it 'Rubyx.await returns native value (not Future)' do
@@ -399,21 +399,21 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       ctx.eval("import asyncio\nasync def add(a, b): return a + b")
       future = ctx.async_await('add(x, y)', x: 20, y: 22)
       expect(future).to be_a(Rubyx::Future)
-      expect(future.value).to eq(42)
+      expect(future.await).to eq(42)
     end
 
     it 'handles string result with globals' do
       ctx = Rubyx.context
       ctx.eval("import asyncio\nasync def greet(n): return f'hello {n}'")
       future = ctx.async_await('greet(name)', name: 'world')
-      expect(future.value).to eq('hello world')
+      expect(future.await).to eq('hello world')
     end
 
     it 'propagates errors with globals' do
       ctx = Rubyx.context
       ctx.eval("import asyncio\nasync def div(x, y): return x / y")
       future = ctx.async_await('div(a, b)', a: 10, b: 0)
-      expect { future.value }.to raise_error(StandardError, /division by zero|ZeroDivisionError/)
+      expect { future.await }.to raise_error(StandardError, /division by zero|ZeroDivisionError/)
     end
   end
 
@@ -447,7 +447,7 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       ctx.eval("import asyncio\nasync def get77(): return 77")
       coro = ctx.eval("get77()")
       future = Rubyx.async_await(coro)
-      expect(future.value).to eq(77)
+      expect(future.await).to eq(77)
     end
   end
 
@@ -504,14 +504,14 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
     end
   end
 
-  describe 'future.value with complex objects' do
+  describe 'future.await with complex objects' do
     it 'returns RubyxObject for non-primitive Python objects' do
       ctx = Rubyx.context
       ctx.eval("import asyncio")
       ctx.eval("async def get_module(): import os; return os")
 
       future = ctx.async_await("get_module()")
-      result = future.value
+      result = future.await
       expect(result).to be_a(RubyxObject)
       expect(result.py_type).to eq('module')
     end

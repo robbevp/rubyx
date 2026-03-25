@@ -769,7 +769,10 @@ mod tests {
             // Second: PyObjectRef → RubyxObject
             let val = stream.next().unwrap().unwrap();
             assert!(!val.is_nil());
-            assert!(i64::try_convert(val).is_err(), "should be RubyxObject, not Integer");
+            assert!(
+                i64::try_convert(val).is_err(),
+                "should be RubyxObject, not Integer"
+            );
 
             // Third: string
             let val = stream.next().unwrap().unwrap();
