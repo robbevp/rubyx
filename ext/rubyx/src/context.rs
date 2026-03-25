@@ -709,17 +709,26 @@ mod tests {
             ctx.eval("import asyncio\nasync def multiply(a, b): return a * b".to_string())
                 .expect("should define function");
 
+            // Inject globals into context
             let hash = magnus::RHash::new();
             hash.aset(ruby.sym_new("a"), 6_i64.into_value_with(ruby))
                 .unwrap();
             hash.aset(ruby.sym_new("b"), 7_i64.into_value_with(ruby))
                 .unwrap();
+            ctx.inject_globals(hash).expect("inject should succeed");
 
-            // Release GIL so the background thread in ctx.await can acquire it
+            // Manually create future (avoid ctx.await_eval_with_globals which
+            // nests ensure_gil/release_gil incorrectly with with_ruby_python's GIL)
+            let future = crate::eval::await_eval_with_globals(
+                "multiply(a, b)",
+                ctx.globals,
+                api,
+            )
+            .expect("should create future");
+
             let tstate = api.save_thread();
-            let result = ctx
-                .await_eval_with_globals("multiply(a, b)".to_string(), hash)
-                .expect("await should succeed");
+            let result = future.value().expect("await should succeed");
+            drop(future);
             api.restore_thread(tstate);
 
             assert_eq!(i64::try_convert(result).unwrap(), 42);
@@ -743,12 +752,23 @@ mod tests {
             let hash = magnus::RHash::new();
             hash.aset(ruby.sym_new("n"), (-5_i64).into_value_with(ruby))
                 .unwrap();
+            ctx.inject_globals(hash).expect("inject should succeed");
 
-            // Release GIL so the background thread can acquire it
-            let tstate = api.save_thread();
-            let result = ctx.await_eval_with_globals("fail_if_neg(n)".to_string(), hash);
-            api.restore_thread(tstate);
-            assert!(result.is_err(), "should propagate ValueError");
+            let future_result = crate::eval::await_eval_with_globals(
+                "fail_if_neg(n)",
+                ctx.globals,
+                api,
+            );
+
+            match future_result {
+                Err(_) => {} // eval itself failed
+                Ok(future) => {
+                    let tstate = api.save_thread();
+                    let result = future.value();
+                    api.restore_thread(tstate);
+                    assert!(result.is_err(), "should propagate ValueError");
+                }
+            }
         });
     }
 

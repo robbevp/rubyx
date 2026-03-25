@@ -3199,13 +3199,15 @@ mod tests {
                 .run_string("get_val()", PY_EVAL_INPUT, globals, globals)
                 .expect("should create coroutine");
 
-            let wrapper = RubyxObject::new(coroutine, api).expect("should wrap coroutine");
-            let coro_value: magnus::Value = magnus::IntoValue::into_value_with(wrapper, ruby);
+            // Manually do what rubyx_await does, but with proper GIL management
+            // for the test environment (can't call rubyx_await directly because
+            // its ensure_gil/release_gil nests incorrectly with with_ruby_python's GIL)
+            let future = crate::future::RubyxFuture::from_coroutine(coroutine, api);
 
-            // Release GIL so the background thread in rubyx_await can acquire it
+            // Release GIL so the background thread can acquire it
             let tstate = api.save_thread();
-            let result =
-                crate::eval::rubyx_await(coro_value).expect("blocking await should succeed");
+            let result = future.value().expect("await should succeed");
+            drop(future);
             api.restore_thread(tstate);
 
             assert_eq!(i64::try_convert(result).unwrap(), 99);
