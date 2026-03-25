@@ -36,14 +36,14 @@ Rubyx.stream(llm.generate("Tell me about Ruby")).each { |token| print token }
 # Non-blocking — Ruby stays free while Python works
 future = Rubyx.async_await("model.predict(data)", data: [1, 2, 3])
 do_other_work()
-result = future.await # GVL released during wait, reacquired when ready
+result = future.value # GVL released during wait, reacquired when ready
 ```
 
 ### Built with non-blocking in mind
 
 - **`Rubyx.stream`** / **`Rubyx.nb_stream`** — release Ruby's GVL during iteration, other threads and Fibers keep
   running
-- **`Rubyx.async_await`** — spawns Python on background threads, returns a `Future` immediately; `future.await` releases
+- **`Rubyx.async_await`** — spawns Python on background threads, returns a `Future` immediately; `future.value` releases
   the GVL while waiting, reacquires when ready
 - **`Rubyx.await`** — GVL released while waiting; returns native Ruby types for primitives, `RubyxObject` for complex
   Python objects
@@ -161,7 +161,7 @@ class TasksController < ApplicationController
     # Non-blocking — returns a Future immediately
     future = Rubyx.async_await(tasks.delayed_greet(params[:name], seconds: 2))
     do_other_work()
-    render json: { message: future.await.to_ruby }
+    render json: { message: future.value.to_ruby }
   end
 end
 ```
@@ -398,7 +398,7 @@ result = ctx.await("fetch(url)", url: "https://example.com")
 # Non-blocking (returns Future)
 future = ctx.async_await("fetch(url)", url: "https://example.com")
 do_other_stuff()
-result = future.await #  GVL released during wait, reacquired when ready
+result = future.value #  GVL released during wait, reacquired when ready
 future.ready? # check without blocking
 ```
 
