@@ -18,6 +18,7 @@ mod convert;
 mod eval;
 mod exception;
 mod future;
+mod gvl;
 mod import;
 mod nonblocking_stream;
 mod pipe_notify;

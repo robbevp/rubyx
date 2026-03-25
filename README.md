@@ -36,15 +36,15 @@ Rubyx.stream(llm.generate("Tell me about Ruby")).each { |token| print token }
 # Non-blocking — Ruby stays free while Python works
 future = Rubyx.async_await("model.predict(data)", data: [1, 2, 3])
 do_other_work()
-result = future.value # get result when ready
+result = future.value # GVL released during wait, reacquired when ready
 ```
 
 ### Built with non-blocking in mind
 
 - **`Rubyx.stream`** / **`Rubyx.nb_stream`** — release Ruby's GVL during iteration, other threads and Fibers keep
   running
-- **`Rubyx.async_await`** — spawns Python on background threads, returns a `Future` immediately
-- **`Rubyx.await`** — blocks only when you choose to
+- **`Rubyx.async_await`** — spawns Python on background threads, returns a `Future` immediately; `future.value` releases the GVL while waiting, reacquires when ready
+- **`Rubyx.await`** — blocks until the coroutine completes, returns a `RubyxObject`
 
 Ideal for LLM streaming, ML inference, data pipelines, and high-concurrency Rails apps.
 
@@ -390,13 +390,13 @@ ctx = Rubyx.context
 ctx.eval("import asyncio")
 ctx.eval("async def fetch(url): ...")
 
-# Blocking
+# Blocking — waits for coroutine to complete
 result = ctx.await("fetch(url)", url: "https://example.com")
 
 # Non-blocking (returns Future)
 future = ctx.async_await("fetch(url)", url: "https://example.com")
 do_other_stuff()
-result = future.value # blocks only when needed
+result = future.value #  GVL released during wait, reacquired when ready
 future.ready? # check without blocking
 ```
 
@@ -451,7 +451,7 @@ svc.Analyzer([1, 2, 3]).summary.to_ruby # => {"count" => 3, "sum" => 6}
 | `Rubyx.import(name)`                 | Import a Python module          |
 | `Rubyx.eval(code, **globals)`        | Evaluate Python code            |
 | `Rubyx.await(code, **globals)`       | Run async code (blocking)       |
-| `Rubyx.async_await(code, **globals)` | Run async code (returns Future) |
+| `Rubyx.async_await(code, **globals)` | Run async code (non-blocking, returns Future) |
 | `Rubyx.stream(iterable)`             | Stream a Python generator       |
 | `Rubyx.nb_stream(iterable)`          | Non-blocking stream (GVL-aware) |
 | `Rubyx.context`                      | Create isolated Python context  |

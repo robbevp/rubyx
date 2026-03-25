@@ -1,3 +1,4 @@
+use crate::gvl::{rb_thread_call_without_gvl, rb_thread_check_ints, recv_loop, ubf_cancel};
 use crate::pipe_notify::PipeNotify;
 use crate::ruby_helpers::runtime_error;
 use crate::stream::StreamItem;
@@ -8,37 +9,6 @@ use std::ffi::c_void;
 use std::os::fd::RawFd;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-
-extern "C" {
-    /// Release the GVL, call `func(data1)`, then reacquire the GVL.
-    ///
-    /// While `func` runs, other Ruby threads can execute. Inside `func`,
-    /// you must NOT call any Ruby C API or access any Ruby VALUE.
-    ///
-    /// If `ubf` is provided, Ruby may call it from another thread to
-    /// interrupt `func` (e.g., on Thread#kill or signal delivery).
-    ///
-    /// # Safety
-    ///
-    /// - `func` must not touch Ruby objects (GVL is not held).
-    /// - `data1` must remain valid for the duration of `func`.
-    /// - `data2` must remain valid for the duration of `ubf` (if provided).
-    fn rb_thread_call_without_gvl(
-        func: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
-        data1: *mut c_void,
-        ubf: Option<unsafe extern "C" fn(*mut c_void)>,
-        data2: *mut c_void,
-    ) -> *mut c_void;
-
-    /// Check for pending Ruby interrupts (Thread#kill, signals, etc.).
-    ///
-    /// Must be called WITH the GVL held. If an interrupt is pending,
-    /// this raises a Ruby exception (longjmp). Call this immediately
-    /// after `rb_thread_call_without_gvl` returns to deliver any
-    /// interrupts that arrived while the GVL was released.
-    fn rb_thread_check_ints();
-
-}
 
 fn create_ruby_io(ruby: &Ruby, fd: RawFd) -> Result<Value, Error> {
     let io_class: Value = ruby.class_object().const_get("IO")?;
@@ -55,54 +25,11 @@ fn has_fiber_scheduler(ruby: &Ruby) -> bool {
         .unwrap_or_else(|_| ruby.qnil().as_value());
     !scheduler.is_nil()
 }
-
-unsafe extern "C" fn ubf_cancel(data: *mut c_void) {
-    let cancel = &*(data as *const AtomicBool);
-    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+pub(crate) unsafe extern "C" fn recv_without_gvl_cb(args: *mut c_void) -> *mut c_void {
+    let args = &mut *(args as *mut crate::nonblocking_stream::RecvArgs);
+    args.result = recv_loop(&args.receiver, &args.cancel);
+    std::ptr::null_mut()
 }
-
-unsafe extern "C" fn recv_without_gvl_cb(args: *mut c_void) -> *mut c_void {
-    let args = &mut *(args as *mut RecvArgs);
-    loop {
-        match args.receiver.try_recv() {
-            Ok(item) => {
-                args.result = Some(Ok(item));
-                return std::ptr::null_mut();
-            }
-            Err(crossbeam_channel::TryRecvError::Empty) => {
-                // Check the cancel flag relaxed already
-                if args.cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                    args.result = None;
-                    return std::ptr::null_mut();
-                }
-
-                // Wait for timeout
-                match args
-                    .receiver
-                    .recv_timeout(std::time::Duration::from_millis(50))
-                {
-                    Ok(item) => {
-                        args.result = Some(Ok(item));
-                        return std::ptr::null_mut();
-                    }
-                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                        // continue to check cancel
-                        continue;
-                    }
-                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                        args.result = Some(Err(crossbeam_channel::RecvError));
-                        return std::ptr::null_mut();
-                    }
-                }
-            }
-            Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                args.result = Some(Err(crossbeam_channel::RecvError));
-                return std::ptr::null_mut();
-            }
-        }
-    }
-}
-
 struct RecvArgs {
     receiver: Receiver<StreamItem>,
     result: Option<Result<StreamItem, crossbeam_channel::RecvError>>,

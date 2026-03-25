@@ -300,6 +300,39 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
     end
   end
 
+  # ========== GVL release during value() ==========
+
+  describe 'GVL release during value()' do
+    it 'other Ruby threads run while value() blocks' do
+      ctx = Rubyx.context
+      ctx.eval("import asyncio")
+      ctx.eval("async def slow_result(): await asyncio.sleep(0.3); return 'done'")
+
+      future = ctx.async_await("slow_result()")
+
+      # Start a Ruby thread that increments a counter while future.value blocks
+      counter = 0
+      mutex = Mutex.new
+      done = false
+
+      worker = Thread.new do
+        until done
+          mutex.synchronize { counter += 1 }
+          sleep(0.01)
+        end
+      end
+
+      result = future.value
+      done = true
+      worker.join
+
+      expect(result).to eq('done')
+      # If the GVL was released, the worker thread should have incremented
+      # the counter multiple times during the ~300ms wait
+      expect(counter).to be > 5
+    end
+  end
+
   # ========== class identity ==========
 
   describe 'class identity' do
