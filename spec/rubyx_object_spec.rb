@@ -169,9 +169,10 @@ RSpec.describe 'RubyxObject', ruby_integration: true do
       expect(result['nested']).to eq({ 'a' => true })
     end
 
-    it 'raises for unconvertible types (modules)' do
+    it 'wraps modules as RubyxObject via PyObjectRef' do
       obj = Rubyx.import('os')
-      expect { obj.to_ruby }.to raise_error(RuntimeError)
+      result = obj.to_ruby
+      expect(result).to be_a(RubyxObject)
     end
   end
 

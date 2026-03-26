@@ -91,8 +91,15 @@ pub(crate) fn python_to_sendable(
     if py_val == api.py_false {
         return Ok(SendableValue::Bool(false));
     }
-    api.incref(py_val);
-    Ok(SendableValue::PyObjectRef(py_val as usize))
+    let has_dict = {
+        let name = std::ffi::CString::new("__dict__").unwrap();
+        api.object_has_attr_string(py_val, name.as_ptr()) != 0
+    };
+    if api.callable_check(py_val) == 0 && has_dict {
+        api.incref(py_val);
+        return Ok(SendableValue::PyObjectRef(py_val as usize));
+    }
+    Err("Cannot convert Python value to Ruby".to_string())
 }
 pub(crate) fn ruby_to_python(
     value: Value,
@@ -1184,13 +1191,13 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_to_ruby_errors_for_module() {
+    fn test_to_ruby_wraps_module_as_rubyx_object() {
         with_ruby_python(|_ruby, api| {
             let module = api.import_module("os").expect("os should import");
             let wrapper = RubyxObject::new(module, api).unwrap();
             assert!(
-                wrapper.to_ruby().is_err(),
-                "module should not convert to Ruby"
+                wrapper.to_ruby().is_ok(),
+                "module should convert to RubyxObject via PyObjectRef"
             );
             drop(wrapper);
             api.decref(module);
@@ -1955,14 +1962,13 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_python_to_sendable_set_returns_py_object_ref() {
+    fn test_python_to_sendable_set_returns_err() {
         use crate::test_helpers::skip_if_no_python;
         let Some(guard) = skip_if_no_python() else {
             return;
         };
         let api = guard.api();
-        // A Python set is not int/float/str/bool/list/tuple/dict, so it
-        // should fall through to PyObjectRef
+        // Sets don't have __dict__, so they return Err (not PyObjectRef)
         let globals = api.dict_new();
         let builtins = api
             .import_module("builtins")
@@ -1974,13 +1980,8 @@ mod tests {
         let py_set = result.expect("set eval should succeed");
         assert!(!py_set.is_null());
 
-        let sendable = python_to_sendable(py_set, api).unwrap();
-        match &sendable {
-            SendableValue::PyObjectRef(addr) => {
-                assert_ne!(*addr, 0);
-            }
-            other => panic!("expected PyObjectRef for set, got {other:?}"),
-        }
+        let sendable = python_to_sendable(py_set, api);
+        assert!(sendable.is_err(), "set should return Err (no __dict__)");
         api.decref(py_set);
         api.decref(builtins);
         api.decref(globals);

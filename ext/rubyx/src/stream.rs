@@ -57,12 +57,16 @@ impl TryInto<magnus::Value> for SendableValue {
             }
             SendableValue::PyObjectRef(addr) => {
                 let py_obj = addr as *mut PyObject;
-                let api = crate::api();
-                RubyxObject::new(py_obj, api)
-                    .map(|obj| obj.into_value_with(&ruby))
-                    .ok_or_else(|| {
-                        magnus::Error::new(runtime_error(), "Failed to wrap Python object")
-                    })?
+                let api = crate::API.get().ok_or_else(|| {
+                    magnus::Error::new(runtime_error(), "Python API not initialized")
+                })?;
+                // RubyxObject::new increfs internally and python_to_sendable also incref
+                let wrapper = RubyxObject::new(py_obj, api).ok_or_else(|| {
+                    magnus::Error::new(runtime_error(), "Failed to wrap Python object")
+                })?;
+                // Balance the extra incref from python_to_sendable
+                api.decref(py_obj);
+                wrapper.into_value_with(&ruby)
             }
         };
         Ok(result)

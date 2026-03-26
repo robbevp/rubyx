@@ -2970,13 +2970,17 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_to_ruby_unconvertible_returns_error() {
+    fn test_to_ruby_wraps_module_via_pyobjectref() {
         with_ruby_python(|_ruby, api| {
-            // Python module objects can't be converted to Ruby primitives
+            // Modules have __dict__ and are not callable, so python_to_sendable
+            // returns PyObjectRef → wrapped as RubyxObject.
             let module = api.import_module("sys").expect("sys should import");
             let wrapper = RubyxObject::new(module, api).unwrap();
             let result = wrapper.to_ruby();
-            assert!(result.is_err(), "module should not be convertible to Ruby");
+            assert!(
+                result.is_ok(),
+                "module should wrap as RubyxObject via PyObjectRef"
+            );
 
             drop(wrapper);
             api.decref(module);
