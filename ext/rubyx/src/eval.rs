@@ -245,7 +245,7 @@ pub(crate) fn rubyx_await(coroutine: Value) -> Result<Value, magnus::Error> {
     let future = RubyxFuture::from_coroutine(obj.as_ptr(), api);
 
     api.release_gil(gil);
-    future.value()
+    crate::future::value_nonblocking(&future)
 }
 
 /// Eval code in context globals to get a coroutine, then run it with asyncio.run().
@@ -290,7 +290,7 @@ pub(crate) fn rubyx_await_with_globals(
     drop(globals);
     api.release_gil(gil);
     match future {
-        Ok(future) => Ok(future.value()?),
+        Ok(future) => Ok(crate::future::value_nonblocking(&future)?),
         Err(e) => Err(e),
     }
 }

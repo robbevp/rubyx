@@ -68,40 +68,17 @@ impl RubyxFuture {
     /// Block until the result is ready and return it as a Ruby value.
     /// Can only be called once — subsequent calls return an error.
     pub fn value(&self) -> Result<Value, Error> {
-        if let Ok(result) = self.receiver.try_recv() {
-            return match result {
-                Ok(sendable) => sendable.try_into(),
-                Err(err) => Err(Error::new(runtime_error(), err)),
-            };
-        }
-
-        let cancel = Arc::new(AtomicBool::new(false));
-        let mut args = FutureRecvArgs {
-            receiver: self.receiver.clone(),
-            result: None,
-            cancel: cancel.clone(),
-        };
-
-        unsafe {
-            rb_thread_call_without_gvl(
-                future_recv_cb,
-                &mut args as *mut FutureRecvArgs as *mut c_void,
-                Some(ubf_cancel),
-                Arc::as_ptr(&cancel) as *mut c_void,
-            );
-            rb_thread_check_ints();
-        }
-
+        // Join the worker thread first
         if let Some(handle) = self.handle.borrow_mut().take() {
             let _ = handle.join();
         }
 
-        match args.result {
-            Some(Ok(Ok(sendable))) => sendable.try_into(),
-            Some(Ok(Err(err))) => Err(Error::new(runtime_error(), err)),
-            _ => Err(Error::new(
+        match self.receiver.try_recv() {
+            Ok(Ok(sendable)) => sendable.try_into(),
+            Ok(Err(err)) => Err(Error::new(runtime_error(), err)),
+            Err(_) => Err(Error::new(
                 runtime_error(),
-                "Future cancelled or worker failed",
+                "Future already consumed or worker failed",
             )),
         }
     }
@@ -116,6 +93,50 @@ impl Drop for RubyxFuture {
         if let Some(handle) = self.handle.borrow_mut().take() {
             let _ = handle.join();
         }
+    }
+}
+
+/// Block until the future is ready, releasing the GVL so other Ruby threads can run.
+#[allow(dead_code)]
+pub(crate) fn value_nonblocking(future: &RubyxFuture) -> Result<Value, Error> {
+    if let Ok(result) = future.receiver.try_recv() {
+        if let Some(handle) = future.handle.borrow_mut().take() {
+            let _ = handle.join();
+        }
+        return match result {
+            Ok(sendable) => sendable.try_into(),
+            Err(err) => Err(Error::new(runtime_error(), err)),
+        };
+    }
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut args = FutureRecvArgs {
+        receiver: future.receiver.clone(),
+        result: None,
+        cancel: cancel.clone(),
+    };
+
+    unsafe {
+        rb_thread_call_without_gvl(
+            future_recv_cb,
+            &mut args as *mut FutureRecvArgs as *mut c_void,
+            Some(ubf_cancel),
+            Arc::as_ptr(&cancel) as *mut c_void,
+        );
+        rb_thread_check_ints();
+    }
+
+    if let Some(handle) = future.handle.borrow_mut().take() {
+        let _ = handle.join();
+    }
+
+    match args.result {
+        Some(Ok(Ok(sendable))) => sendable.try_into(),
+        Some(Ok(Err(err))) => Err(Error::new(runtime_error(), err)),
+        _ => Err(Error::new(
+            runtime_error(),
+            "Future cancelled or worker failed",
+        )),
     }
 }
 

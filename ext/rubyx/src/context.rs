@@ -53,7 +53,7 @@ impl RubyxContext {
         let future = await_eval_with_globals(&code, self.globals, self.api);
         self.api.release_gil(gil);
         match future {
-            Ok(value) => Ok(value.value()?),
+            Ok(future) => Ok(crate::future::value_nonblocking(&future)?),
             Err(e) => Err(e),
         }
     }
@@ -70,7 +70,7 @@ impl RubyxContext {
         };
         self.api.release_gil(gil);
         match future {
-            Ok(value) => Ok(value.value()?),
+            Ok(future) => Ok(crate::future::value_nonblocking(&future)?),
             Err(e) => Err(e),
         }
     }
@@ -719,12 +719,8 @@ mod tests {
 
             // Manually create future (avoid ctx.await_eval_with_globals which
             // nests ensure_gil/release_gil incorrectly with with_ruby_python's GIL)
-            let future = crate::eval::await_eval_with_globals(
-                "multiply(a, b)",
-                ctx.globals,
-                api,
-            )
-            .expect("should create future");
+            let future = crate::eval::await_eval_with_globals("multiply(a, b)", ctx.globals, api)
+                .expect("should create future");
 
             let tstate = api.save_thread();
             let result = future.value().expect("await should succeed");
@@ -754,11 +750,8 @@ mod tests {
                 .unwrap();
             ctx.inject_globals(hash).expect("inject should succeed");
 
-            let future_result = crate::eval::await_eval_with_globals(
-                "fail_if_neg(n)",
-                ctx.globals,
-                api,
-            );
+            let future_result =
+                crate::eval::await_eval_with_globals("fail_if_neg(n)", ctx.globals, api);
 
             match future_result {
                 Err(_) => {} // eval itself failed
