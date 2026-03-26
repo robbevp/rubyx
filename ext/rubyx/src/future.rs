@@ -65,22 +65,10 @@ impl RubyxFuture {
         }
     }
 
-    /// Block until the result is ready and return it as a Ruby value.
+    /// Block until the future is ready and releasing the GVL so other Ruby threads can run.
     /// Can only be called once — subsequent calls return an error.
     pub fn value(&self) -> Result<Value, Error> {
-        // Join the worker thread first
-        if let Some(handle) = self.handle.borrow_mut().take() {
-            let _ = handle.join();
-        }
-
-        match self.receiver.try_recv() {
-            Ok(Ok(sendable)) => sendable.try_into(),
-            Ok(Err(err)) => Err(Error::new(runtime_error(), err)),
-            Err(_) => Err(Error::new(
-                runtime_error(),
-                "Future already consumed or worker failed",
-            )),
-        }
+        value_nonblocking(self)
     }
 
     pub fn is_ready(&self) -> bool {
@@ -97,7 +85,6 @@ impl Drop for RubyxFuture {
 }
 
 /// Block until the future is ready, releasing the GVL so other Ruby threads can run.
-#[allow(dead_code)]
 pub(crate) fn value_nonblocking(future: &RubyxFuture) -> Result<Value, Error> {
     if let Ok(result) = future.receiver.try_recv() {
         if let Some(handle) = future.handle.borrow_mut().take() {
@@ -456,6 +443,22 @@ mod tests {
         }
     }
 
+    /// Test helper: read from future without going through value()/value_nonblocking().
+    /// Avoids rb_thread_call_without_gvl which deadlocks in the embedded Ruby test harness.
+    fn test_recv(future: &RubyxFuture) -> Result<Value, Error> {
+        if let Some(handle) = future.handle.borrow_mut().take() {
+            let _ = handle.join();
+        }
+        match future.receiver.try_recv() {
+            Ok(Ok(sendable)) => sendable.try_into(),
+            Ok(Err(err)) => Err(Error::new(runtime_error(), err)),
+            Err(_) => Err(Error::new(
+                runtime_error(),
+                "Future already consumed or worker failed",
+            )),
+        }
+    }
+
     #[test]
     #[serial]
     fn test_value_fast_path_already_ready() {
@@ -464,7 +467,7 @@ mod tests {
             tx.send(Ok(SendableValue::Integer(7))).unwrap();
 
             let future = make_future(rx);
-            let val = future.value().unwrap();
+            let val = test_recv(&future).unwrap();
             assert_eq!(i64::try_convert(val).unwrap(), 7);
         });
     }
@@ -477,7 +480,7 @@ mod tests {
             tx.send(Err("boom".to_string())).unwrap();
 
             let future = make_future(rx);
-            let err = future.value().unwrap_err();
+            let err = test_recv(&future).unwrap_err();
             assert!(err.to_string().contains("boom"));
         });
     }
@@ -497,7 +500,7 @@ mod tests {
             let future = make_future_with_handle(rx, handle);
 
             let start = Instant::now();
-            let val = future.value().unwrap();
+            let val = test_recv(&future).unwrap();
             let elapsed = start.elapsed();
 
             let s: String = TryConvert::try_convert(val).unwrap();
@@ -516,33 +519,33 @@ mod tests {
             // Integer
             let (tx, rx) = bounded(1);
             tx.send(Ok(SendableValue::Integer(42))).unwrap();
-            let val = make_future(rx).value().unwrap();
+            let val = test_recv(&make_future(rx)).unwrap();
             assert_eq!(i64::try_convert(val).unwrap(), 42);
 
             // Float
             let (tx, rx) = bounded(1);
             tx.send(Ok(SendableValue::Float(2.5))).unwrap();
-            let val = make_future(rx).value().unwrap();
+            let val = test_recv(&make_future(rx)).unwrap();
             assert_eq!(f64::try_convert(val).unwrap(), 2.5);
 
             // String
             let (tx, rx) = bounded(1);
             tx.send(Ok(SendableValue::Str("hello".to_string())))
                 .unwrap();
-            let val = make_future(rx).value().unwrap();
+            let val = test_recv(&make_future(rx)).unwrap();
             let s: String = TryConvert::try_convert(val).unwrap();
             assert_eq!(s, "hello");
 
             // Bool
             let (tx, rx) = bounded(1);
             tx.send(Ok(SendableValue::Bool(true))).unwrap();
-            let val = make_future(rx).value().unwrap();
+            let val = test_recv(&make_future(rx)).unwrap();
             assert_eq!(bool::try_convert(val).unwrap(), true);
 
             // Nil
             let (tx, rx) = bounded(1);
             tx.send(Ok(SendableValue::Nil)).unwrap();
-            let val = make_future(rx).value().unwrap();
+            let val = test_recv(&make_future(rx)).unwrap();
             assert!(val.is_nil());
         });
     }
@@ -555,8 +558,8 @@ mod tests {
             tx.send(Ok(SendableValue::Integer(1))).unwrap();
 
             let future = make_future(rx);
-            let _ = future.value().unwrap();
-            let err = future.value().unwrap_err();
+            let _ = test_recv(&future).unwrap();
+            let err = test_recv(&future).unwrap_err();
             assert!(err.to_string().contains("consumed") || err.to_string().contains("failed"));
         });
     }
@@ -606,7 +609,7 @@ mod tests {
                 .unwrap();
 
             let future = make_future(rx);
-            let val = future.value().unwrap();
+            let val = test_recv(&future).unwrap();
 
             // Should be a RubyxObject, not a primitive
             assert!(!val.is_nil());

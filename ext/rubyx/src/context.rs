@@ -723,6 +723,9 @@ mod tests {
                 .expect("should create future");
 
             let tstate = api.save_thread();
+            while !future.is_ready() {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
             let result = future.value().expect("await should succeed");
             drop(future);
             api.restore_thread(tstate);
@@ -757,6 +760,9 @@ mod tests {
                 Err(_) => {} // eval itself failed
                 Ok(future) => {
                     let tstate = api.save_thread();
+                    while !future.is_ready() {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
                     let result = future.value();
                     api.restore_thread(tstate);
                     assert!(result.is_err(), "should propagate ValueError");
@@ -790,6 +796,9 @@ mod tests {
             api.release_gil(gil);
 
             let tstate = api.save_thread();
+            while !future.is_ready() {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
             let result = future.value().expect("future should resolve");
             drop(future);
             api.restore_thread(tstate);

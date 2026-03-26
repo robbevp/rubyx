@@ -306,7 +306,6 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
       ctx.eval("async def slow_result(): await asyncio.sleep(0.3); return 'done'")
       coro = ctx.eval("slow_result()")
 
-      # Start a Ruby thread that increments a counter while Rubyx.await blocks
       counter = 0
       mutex = Mutex.new
       done = false
@@ -318,14 +317,61 @@ RSpec.describe 'Rubyx::Future', ruby_integration: true do
         end
       end
 
-      # Rubyx.await uses value_nonblocking which releases the GVL
       result = Rubyx.await(coro)
       done = true
       worker.join
 
       expect(result).to eq('done')
-      # If the GVL was released, the worker thread should have incremented
-      # the counter multiple times during the ~300ms wait
+      expect(counter).to be > 5
+    end
+
+    it 'other Ruby threads run while future.await blocks' do
+      ctx = Rubyx.context
+      ctx.eval("import asyncio")
+      ctx.eval("async def slow_future(): await asyncio.sleep(0.3); return 'future_done'")
+
+      future = ctx.async_await("slow_future()")
+
+      counter = 0
+      mutex = Mutex.new
+      done = false
+
+      worker = Thread.new do
+        until done
+          mutex.synchronize { counter += 1 }
+          sleep(0.01)
+        end
+      end
+
+      result = future.await
+      done = true
+      worker.join
+
+      expect(result).to eq('future_done')
+      expect(counter).to be > 5
+    end
+
+    it 'other Ruby threads run while ctx.await blocks' do
+      ctx = Rubyx.context
+      ctx.eval("import asyncio")
+      ctx.eval("async def slow_ctx(): await asyncio.sleep(0.3); return 'ctx_done'")
+
+      counter = 0
+      mutex = Mutex.new
+      done = false
+
+      worker = Thread.new do
+        until done
+          mutex.synchronize { counter += 1 }
+          sleep(0.01)
+        end
+      end
+
+      result = ctx.await("slow_ctx()")
+      done = true
+      worker.join
+
+      expect(result).to eq('ctx_done')
       expect(counter).to be > 5
     end
   end

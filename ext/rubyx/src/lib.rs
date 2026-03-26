@@ -3014,6 +3014,17 @@ mod tests {
 
     // ========== Rubyx::Future / async_await tests ==========
 
+    /// Spin-wait then call value() — ensures the fast path is hit in tests,
+    /// avoiding rb_thread_call_without_gvl which deadlocks in embedded Ruby.
+    fn test_future_value(
+        future: &crate::future::RubyxFuture,
+    ) -> Result<magnus::Value, magnus::Error> {
+        while !future.is_ready() {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        future.value()
+    }
+
     /// Helper: define an async function in globals, create coroutine,
     /// release GIL, run future, restore GIL, return result.
     fn run_future_test(
@@ -3031,7 +3042,7 @@ mod tests {
 
         let tstate = api.save_thread();
         let future = crate::future::RubyxFuture::from_coroutine(coroutine, api);
-        let result = future.value();
+        let result = test_future_value(&future);
         drop(future);
         api.restore_thread(tstate);
 
@@ -3210,7 +3221,7 @@ mod tests {
 
             // Release GIL so the background thread can acquire it
             let tstate = api.save_thread();
-            let result = future.value().expect("await should succeed");
+            let result = test_future_value(&future).expect("await should succeed");
             drop(future);
             api.restore_thread(tstate);
 
@@ -3238,7 +3249,7 @@ mod tests {
 
             // Release GIL so background thread can run asyncio
             let tstate = api.save_thread();
-            let result = future.value().expect("future should resolve");
+            let result = test_future_value(&future).expect("future should resolve");
             drop(future);
             api.restore_thread(tstate);
 
@@ -3267,7 +3278,7 @@ mod tests {
                 Ok(future) => {
                     // Eval succeeded but asyncio.run should fail
                     let tstate = api.save_thread();
-                    let result = future.value();
+                    let result = test_future_value(&future);
                     api.restore_thread(tstate);
                     assert!(result.is_err(), "should propagate error");
                 }
@@ -3457,7 +3468,7 @@ mod tests {
                 .expect("await should succeed");
 
             let tstate = api.save_thread();
-            let result = future.value().expect("future should resolve");
+            let result = test_future_value(&future).expect("future should resolve");
             drop(future);
             api.restore_thread(tstate);
 
@@ -3492,7 +3503,7 @@ mod tests {
                 .expect("await should succeed");
 
             let tstate = api.save_thread();
-            let result = future.value().expect("future should resolve");
+            let result = test_future_value(&future).expect("future should resolve");
             drop(future);
             api.restore_thread(tstate);
 
@@ -3529,7 +3540,7 @@ mod tests {
                 Err(_) => {} // eval itself failed
                 Ok(future) => {
                     let tstate = api.save_thread();
-                    let result = future.value();
+                    let result = test_future_value(&future);
                     api.restore_thread(tstate);
                     assert!(result.is_err(), "should propagate ValueError");
                 }
@@ -3576,7 +3587,7 @@ mod tests {
             // Release GIL so the background thread can acquire it
             let tstate = api.save_thread();
             let future = crate::future::RubyxFuture::from_coroutine(coroutine, api);
-            let result = future.value().expect("future should resolve");
+            let result = test_future_value(&future).expect("future should resolve");
             drop(future);
             api.restore_thread(tstate);
 
@@ -3621,7 +3632,7 @@ mod tests {
 
             let tstate = api.save_thread();
             let future = crate::future::RubyxFuture::from_coroutine(coroutine, api);
-            let result = future.value().expect("future should resolve");
+            let result = test_future_value(&future).expect("future should resolve");
             drop(future);
             api.restore_thread(tstate);
 
@@ -3665,7 +3676,7 @@ mod tests {
 
             let tstate = api.save_thread();
             let future = crate::future::RubyxFuture::from_coroutine(coroutine, api);
-            let result = future.value();
+            let result = test_future_value(&future);
             drop(future);
             api.restore_thread(tstate);
 
