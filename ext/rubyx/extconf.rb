@@ -19,4 +19,6 @@ end
 
 require 'rb_sys/mkmf'
 
-create_rust_makefile('rubyx/rubyx')
+create_rust_makefile('rubyx/rubyx') do |r|
+  r.extra_rustflags = %w[--frozen --offline --locked]
+end
